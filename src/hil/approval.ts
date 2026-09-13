@@ -4,6 +4,9 @@ export interface ExecProposal {
   command: string;
   cwd: string;
   reason?: string;
+  /** Identifies the requesting turn when several can prompt on one terminal (daemon HIL).
+   * Absent for single-session callers such as `dev chat`, whose rendering is unchanged. */
+  traceId?: string;
 }
 
 export type ApprovalDecision =
@@ -19,6 +22,7 @@ type TtyInput = NodeJS.ReadableStream & { isTTY?: boolean };
 function renderProposal(proposal: ExecProposal): string {
   const lines = [
     "======================= [AI EXECUTION PROPOSAL] =======================",
+    ...(proposal.traceId ? [`Turn   : ${proposal.traceId}`] : []),
     `Reason : ${proposal.reason ?? "(none given)"}`,
     `Dir    : ${proposal.cwd}`,
     `Command: ${proposal.command}`,

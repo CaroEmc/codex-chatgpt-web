@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
-import { createHilExecGate, createHilEmitFilter } from "../src/adapters/chatgpt-web/hil-interceptor";
-import type { ApprovalGateway, ApprovalDecision } from "../src/hil/approval";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHilExecGate, createHilEmitFilter, HilApprovalQueue } from "../src/adapters/chatgpt-web/hil-interceptor";
+import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hil/approval";
 
 function fakeGateway(decision: ApprovalDecision): ApprovalGateway {
   return { request: async () => decision };
@@ -71,12 +74,13 @@ test("createHilEmitFilter flushes verbatim when a [-prefixed delta turns out not
 });
 
 test("createHilEmitFilter handles bracketed text split across calls without duplication", () => {
-  const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  type TestEvent = { type: string; text?: string; phase?: string };
+  const seen: TestEvent[] = [];
+  const filtered = createHilEmitFilter<TestEvent>(event => seen.push(event));
   filtered({ type: "text_delta", text: "see [" });
   filtered({ type: "text_delta", text: "1] for details" });
   // Reconstruct emitted text
-  const reconstructed = seen.map(e => e.text || "").join("");
+  const reconstructed = seen.map(event => event.text ?? "").join("");
   expect(reconstructed).toBe("see [1] for details");
   expect(seen).toEqual([
     { type: "text_delta", text: "see [" },
@@ -118,4 +122,102 @@ test("createHilEmitFilter handles EXEC_REQUEST split mid-token across calls", ()
   filtered({ type: "done" });
   // Should only see the done event, protocol block is withheld
   expect(seen).toEqual([{ type: "done" }]);
+});
+
+// --- Finding 5: an approved command must never spawn for a cancelled turn -------------------
+
+test("createHilExecGate finalizes without prompting when the turn is already aborted", async () => {
+  let prompted = false;
+  const controller = new AbortController();
+  controller.abort();
+  const gate = createHilExecGate({
+    approvalGateway: { request: async () => { prompted = true; return { action: "run", command: "echo hi" }; } },
+    workspaceCwd: "/workspace",
+    runCommand: async () => { throw new Error("runCommand must not be reached for an aborted turn"); },
+  });
+  expect(await gate.check("[EXEC_REQUEST]\ncommand: echo hi\n[/EXEC_REQUEST]", controller.signal))
+    .toEqual({ action: "finalize" });
+  expect(prompted).toBe(false);
+});
+
+test("createHilExecGate never spawns the command when the turn is cancelled while the approval prompt is open", async () => {
+  // Uses the REAL runApprovedCommand (no runCommand injection), so this asserts on an actual child
+  // process: the approved command would create this marker file if it ever reached spawn().
+  const workspace = mkdtempSync(join(tmpdir(), "hil-abort-"));
+  const marker = join(workspace, "spawned.txt");
+  const controller = new AbortController();
+  const gate = createHilExecGate({
+    approvalGateway: {
+      // The operator takes their time; Codex cancels the turn while the prompt is still open.
+      request: async () => {
+        controller.abort();
+        return { action: "run", command: `touch ${JSON.stringify(marker)}` };
+      },
+    },
+    workspaceCwd: workspace,
+  });
+  const verdict = await gate.check("[EXEC_REQUEST]\ncommand: touch spawned.txt\n[/EXEC_REQUEST]", controller.signal);
+  expect(verdict).toEqual({ action: "finalize" });
+  expect(existsSync(marker)).toBe(false);
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("createHilExecGate still resumes normally when the supplied signal never aborts", async () => {
+  const controller = new AbortController();
+  const gate = createHilExecGate({
+    approvalGateway: fakeGateway({ action: "run", command: "echo hi" }),
+    workspaceCwd: "/workspace",
+    runCommand: async () => "[EXEC_RESULT]\nexit_code: 0\noutput:\nhi\n[/EXEC_RESULT]",
+  });
+  expect(await gate.check("[EXEC_REQUEST]\ncommand: echo hi\n[/EXEC_REQUEST]", controller.signal)).toEqual({
+    action: "resume",
+    followUpText: "[EXEC_RESULT]\nexit_code: 0\noutput:\nhi\n[/EXEC_RESULT]",
+  });
+});
+
+// --- Finding 3: concurrent turns must not open two readline interfaces on one stdin ----------
+
+test("HilApprovalQueue serializes concurrent approvals and stamps each proposal with its turn id", async () => {
+  let live = 0;
+  let maxLive = 0;
+  const seen: ExecProposal[] = [];
+  const gateway: ApprovalGateway = {
+    request: async proposal => {
+      seen.push(proposal);
+      live += 1;
+      maxLive = Math.max(maxLive, live);
+      await new Promise(resolve => setTimeout(resolve, 15));
+      live -= 1;
+      return { action: "run", command: proposal.command };
+    },
+  };
+  const queue = new HilApprovalQueue(gateway);
+  const decisions = await Promise.all([
+    queue.forTurn("trace-a").request({ command: "a", cwd: "/w" }),
+    queue.forTurn("trace-b").request({ command: "b", cwd: "/w" }),
+    queue.forTurn("trace-c").request({ command: "c", cwd: "/w" }),
+  ]);
+  expect(maxLive).toBe(1);
+  expect(seen.map(proposal => proposal.traceId)).toEqual(["trace-a", "trace-b", "trace-c"]);
+  expect(decisions).toEqual([
+    { action: "run", command: "a" },
+    { action: "run", command: "b" },
+    { action: "run", command: "c" },
+  ]);
+});
+
+test("HilApprovalQueue keeps draining after one prompt fails", async () => {
+  let calls = 0;
+  const queue = new HilApprovalQueue({
+    request: async proposal => {
+      calls += 1;
+      if (proposal.command === "boom") throw new Error("prompt failed");
+      return { action: "run", command: proposal.command };
+    },
+  });
+  const failing = queue.forTurn("t1").request({ command: "boom", cwd: "/w" });
+  const following = queue.forTurn("t2").request({ command: "ok", cwd: "/w" });
+  await expect(failing).rejects.toThrow("prompt failed");
+  await expect(following).resolves.toEqual({ action: "run", command: "ok" });
+  expect(calls).toBe(2);
 });

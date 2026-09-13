@@ -224,6 +224,30 @@ test("a resume verdict submits the exact follow-up text, and the turn only final
   }
 }, 20_000);
 
+test("runBrowserTurn hands the turn's own abortSignal to every hilExecGate check", async () => {
+  // The gate opens a blocking TTY prompt and then spawns a real shell command. Without the turn's
+  // signal it cannot tell that Codex cancelled the turn while the operator was deciding, and would
+  // run the command for a turn that no longer exists.
+  const harness = buildHarness({ responses: ["first answer", "second answer"] });
+  try {
+    const abort = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    const hilExecGate: HilExecGate = {
+      async check(_finalText, abortSignal) {
+        signals.push(abortSignal);
+        return signals.length === 1
+          ? { action: "resume", followUpText: "[EXEC_RESULT]\nok\n[/EXEC_RESULT]" }
+          : { action: "finalize" };
+      },
+    };
+    await harness.runTurn({ onTextDelta: () => {}, hilExecGate, abortSignal: abort.signal });
+    expect(signals).toHaveLength(2);
+    expect(signals.every(signal => signal === abort.signal)).toBeTrue();
+  } finally {
+    harness.cleanup();
+  }
+}, 20_000);
+
 test("two consecutive resume rounds stay inside one runBrowserTurn call without accumulating stale state", async () => {
   const harness = buildHarness({ responses: ["first answer", "second answer", "third answer"] });
   try {

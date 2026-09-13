@@ -4948,7 +4948,7 @@ export class ChatGptBrowserWorker {
               }
             }
             if (turn.hilExecGate) {
-              const verdict = await turn.hilExecGate.check(snapshot.visibleText);
+              const verdict = await turn.hilExecGate.check(snapshot.visibleText, turn.abortSignal);
               if (verdict.action === "resume") {
                 submissionBaseline = await this.captureSubmissionBaseline(page);
                 await this.attachPromptWithCompactionRetry(

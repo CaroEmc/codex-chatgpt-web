@@ -210,6 +210,16 @@ export class LauncherBrowserHelperClient {
 
   async run(turn: BrowserTurn): Promise<string> {
     if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
+    if (turn.hilExecGate) {
+      // The run frame below is an explicit field whitelist, and `hilExecGate` is a live object with
+      // a method: it cannot cross this IPC boundary at all, and no helper feature can make it. This
+      // is checked before the helper is even started, because a silently dropped gate would finish
+      // the turn with the `[EXEC_REQUEST]` block filtered out of Codex's transcript (the parent
+      // process still runs that filter) and the command never proposed or run.
+      throw new Error(
+        "Launcher browser host does not support human-in-the-loop local exec; HIL requires the managed-chrome browser host",
+      );
+    }
     await this.ensureChild();
     if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     if (turn.onMultipartStageAcknowledged && !this.helperFeatures.has("multipart-stage-ack")) {

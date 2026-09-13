@@ -1,9 +1,12 @@
 import { parseExecRequest } from "../../hil/protocol";
 import { runApprovedCommand, type RawExecRequest } from "../../hil/exec";
-import type { ApprovalGateway } from "../../hil/approval";
+import type { ApprovalDecision, ApprovalGateway, ExecProposal } from "../../hil/approval";
 
 export interface HilExecGate {
-  check(finalText: string): Promise<
+  /** `abortSignal` is the owning turn's signal. A turn that is already gone (Codex cancelled
+   * mid-approval) must never spawn its approved command, so the gate finalizes instead of
+   * resuming both before prompting and again after the approval decision settles. */
+  check(finalText: string, abortSignal?: AbortSignal): Promise<
     | { action: "finalize" }
     | { action: "resume"; followUpText: string }
   >;
@@ -19,13 +22,60 @@ export interface HilExecGateDeps {
 export function createHilExecGate(deps: HilExecGateDeps): HilExecGate {
   const runCommand = deps.runCommand ?? runApprovedCommand;
   return {
-    async check(finalText) {
+    async check(finalText, abortSignal) {
       const request = parseExecRequest(finalText);
       if (!request) return { action: "finalize" };
-      const followUpText = await runCommand(deps.approvalGateway, request, deps.workspaceCwd);
+      // The turn is already gone: nothing to resume into, and nothing may be spawned on its behalf.
+      if (abortSignal?.aborted) return { action: "finalize" };
+      // A TTY approval prompt blocks for as long as the operator takes, so the turn can be
+      // cancelled while it is open. Re-checking the signal *after* the decision settles but
+      // before `runApprovedCommand` reaches `spawn` is what actually prevents a command from
+      // running for a dead turn; reporting it as a rejection is the one decision that makes
+      // `runApprovedCommand` return without spawning anything.
+      const gateway: ApprovalGateway = abortSignal
+        ? {
+          request: async proposal => {
+            const decision = await deps.approvalGateway.request(proposal);
+            return abortSignal.aborted ? { action: "reject" } : decision;
+          },
+        }
+        : deps.approvalGateway;
+      const followUpText = await runCommand(gateway, request, deps.workspaceCwd);
+      if (abortSignal?.aborted) return { action: "finalize" };
       return { action: "resume", followUpText };
     },
   };
+}
+
+/**
+ * Serializes every HIL approval prompt for one adapter onto the daemon's single stdin.
+ *
+ * Up to `MAX_CHATGPT_BROWSER_TABS` browser turns can run at once, and each one that hits an
+ * `[EXEC_REQUEST]` wants the terminal. `TtyApprovalGateway` opens a `readline.Interface` on
+ * stdin for the duration of a prompt, and two concurrent interfaces on one stream corrupt each
+ * other and can permanently hang the next prompt (see src/hil/approval.ts). This queue keeps at
+ * most one prompt live at a time and stamps each proposal with its turn's `traceId`, so an
+ * operator approving concurrent turns can tell them apart.
+ */
+export class HilApprovalQueue {
+  private tail: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly gateway: ApprovalGateway) {}
+
+  /** An `ApprovalGateway` view bound to one turn; every prompt it raises waits its turn. */
+  forTurn(traceId: string): ApprovalGateway {
+    return { request: proposal => this.enqueue({ ...proposal, traceId }) };
+  }
+
+  private enqueue(proposal: ExecProposal): Promise<ApprovalDecision> {
+    // Chain off settlement (not success) so one failed prompt cannot wedge the queue forever.
+    const decision = this.tail.then(
+      () => this.gateway.request(proposal),
+      () => this.gateway.request(proposal),
+    );
+    this.tail = decision.then(() => undefined, () => undefined);
+    return decision;
+  }
 }
 
 /**

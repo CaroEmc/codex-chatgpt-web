@@ -92,6 +92,29 @@ test("a shared readline.Interface lets a REPL prompt and a mid-session approval 
   }
 });
 
+test("a proposal carrying a traceId labels the prompt with the requesting turn", async () => {
+  // Concurrent daemon HIL turns share one terminal; without the turn label an operator cannot
+  // tell which turn is asking. Single-session callers (dev chat) pass no traceId and see no line.
+  const { input, output, written } = fakeTty(true);
+  const gateway = new TtyApprovalGateway(input, output);
+  const decision = gateway.request({ ...proposal, traceId: "trace_abc123" });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(written()).toContain("Turn   : trace_abc123");
+  input.write("n\n");
+  await decision;
+});
+
+test("a proposal without a traceId renders exactly as before (dev chat is unchanged)", async () => {
+  const { input, output, written } = fakeTty(true);
+  const gateway = new TtyApprovalGateway(input, output);
+  const decision = gateway.request(proposal);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(written()).not.toContain("Turn   :");
+  expect(written().split("\n")[1]).toBe("Reason : Check status");
+  input.write("n\n");
+  await decision;
+});
+
 test("the proposal box is rendered before a decision arrives", async () => {
   const { input, output, written } = fakeTty(true);
   const gateway = new TtyApprovalGateway(input, output);
