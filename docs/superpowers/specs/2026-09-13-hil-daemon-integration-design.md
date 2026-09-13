@@ -16,10 +16,14 @@ non-streaming, one-round-per-HTTP-call turns. That spec explicitly deferred
 
 This spec is that follow-on: wiring the same `[EXEC_REQUEST]`/`[EXEC_RESULT]`
 protocol into the actual production daemon that Codex talks to over
-`/v1/responses` — `src/server.ts`, `src/bridge.ts`, and the `chatgpt-web`
-adapter (`src/adapters/chatgpt-web/`), which streams a real, live browser turn
-back to Codex incrementally rather than returning one complete round at a
-time.
+`/v1/responses` — the request-processing path runs through `src/server.ts`,
+`src/bridge.ts`, and the `chatgpt-web` adapter (`src/adapters/chatgpt-web/`),
+which streams a real, live browser turn back to Codex incrementally rather
+than returning one complete round at a time. As detailed in §2, the changes
+this spec actually makes are narrower than that whole path: `src/bridge.ts`
+is unmodified, `src/server.ts` gains only startup-flag plumbing (§3) with its
+request-processing/SSE logic untouched (§10), and the new surface lives in
+`src/adapters/chatgpt-web/index.ts` and `browser-worker.ts`.
 
 ## 2. Why the production daemon is structurally different from `dev chat`
 
@@ -33,15 +37,29 @@ output text. The production path is the opposite: `responseRequest()`
 chunks in real time. `text_delta` events arrive incrementally as the browser
 worker observes them (`onTextDelta` in `src/adapters/chatgpt-web/index.ts`).
 
-There is also no existing way to inject an arbitrary follow-up message into a
-still-open browser turn without a new Codex-initiated HTTP request — except
-one precedent: the tool-capable (`mode.localTools`) branch of `runTurn`
-(`src/adapters/chatgpt-web/index.ts`, around line 730) already passes
-`prepareResume` to `worker.run(...)`, letting a turn continue across a tool
-round-trip while staying on the same live browser session. The browser-only
-branch (`!mode.localTools`, `index.ts:672`) has no `prepareResume` today. This
-design extends that existing, already-proven pattern into the browser-only
-branch rather than inventing a new mechanism.
+**A cross-invocation mechanism was considered and rejected.** `prepareResume`/
+`retainConversation`/`conversationKey` (the tool-capable branch's pattern for
+resuming a retained browser tab across a *new, separate* `runTurn()` call) looks
+superficially reusable, but is not: session bookkeeping (`ChatGptTurnSessions`,
+`src/adapters/chatgpt-web/turn-execution.ts`) binds exactly one browser runtime
+per `executionKey` with no way to attach a second one; round journaling
+(`appendRoundEvents`/`completeRound`, `turn-execution.ts:411-457`) is per-HTTP-call
+and permanently freezes once a round completes; and `src/bridge.ts` (`:585-680`)
+tears down the entire SSE/HTTP response the instant it sees the *first*
+terminal (`done`/`error`/`incomplete`) event. An interceptor built around a
+second, internally-triggered `worker.run()` call would therefore either crash
+(appending to a completed round) or have its second call's events silently
+dropped once the first call's `done` already closed the stream.
+
+The mechanism that actually works stays entirely inside a single `worker.run()`
+call, so round/session/bridge bookkeeping never sees more than one turn: it
+extends `runBrowserTurn`'s own turn-completion decision inside
+`src/adapters/chatgpt-web/browser-worker.ts` (§5), reusing that file's own
+message-submission primitives (`attachPrompt`/`sendAttachedPrompt`, already
+called more than once per turn by the existing multipart/Bigger-Context
+staged-submission path) to inject the follow-up into the same open page
+before the turn is allowed to finalize. This means `browser-worker.ts` is no
+longer a non-goal for this feature — see §10.
 
 ## 3. Activation
 
@@ -76,82 +94,107 @@ confirming the existing dev-chat test suite still passes after the move.
 The production daemon integration consumes `src/hil/*` directly; it does not
 depend on anything in `src/dev-chat/`.
 
-## 5. The interceptor: `src/adapters/chatgpt-web/hil-interceptor.ts`
+## 5. The exec gate: a new `hilExecGate` hook in `browser-worker.ts`
 
-New module, `createHilInterceptor(realEmit, deps): { emit, onAbort }`:
+`runBrowserTurn`'s completion loop (`browser-worker.ts:4774-5015`) already
+decouples "the DOM looks finished" (`completionReady`, computed ~`:4912`) from
+"actually finalize the turn": when a `completionFence` is present (today, only
+for MCP tool-call race prevention), the loop calls `begin()`/`commit()` and
+loops back with a 250ms sleep instead of finalizing if it declines. This spec
+adds a second, parallel gate with the same shape but content-driven instead
+of activity-driven:
 
 ```ts
-interface HilInterceptorDeps {
-  approvalGateway: ApprovalGateway; // from src/hil/approval.ts
-  runCommand: typeof runApprovedCommand; // from src/hil/exec.ts, injected for testability
-  workspaceCwd: string;
-  requestResume: (resultText: string) => void; // calls worker.run's prepareResume
-  abortSignal: AbortSignal; // the turn's existing browserAbort.signal
+// New field on the BrowserTurn interface (browser-worker.ts:1144-1149 area)
+interface HilExecGate {
+  /** Called once completionReady is true, before the turn would otherwise
+   * finalize. `finalText` is the fully-settled, debounced text the
+   * completion tracker just confirmed stable. */
+  check(finalText: string): Promise<
+    | { action: "finalize" }
+    | { action: "resume"; followUpText: string }
+  >;
 }
+// on BrowserTurn:
+hilExecGate?: HilExecGate;
 ```
 
-`createHilInterceptor` wraps the `emit` callback passed to `runTurn`
-(`src/adapters/base.ts:14`) only when `config.hilEnabled` is true for a
-browser-only turn. It runs a three-state machine over `text_delta` events,
-mirroring the PRD §3.2 buffer but built for the daemon's real event stream
-rather than raw SSE bytes:
+Inserted into `runBrowserTurn`'s loop immediately after `completionReady`
+becomes true (and after any `completionFence` check, ~`:4912-4945`), before
+`markdownBuffer.finish()`/`break` (~`:4949-4969`):
 
-- **PASSTHROUGH** (default): every `AdapterEvent` is forwarded to `realEmit`
-  unchanged. A `text_delta` whose text contains the literal prefix `[` is
-  inspected further; everything else (tool events, heartbeats, `done`, etc.)
-  always passes straight through in every state.
-- **BUFFERING**: entered when accumulated `text_delta` text since the last
-  flush point starts matching `[EXEC_REQUEST`. Withholds forwarding until
-  either (a) `parseExecRequest` (from `src/hil/protocol.ts`) succeeds against
-  the accumulated text — proceed to PENDING_APPROVAL — or (b) the accumulated
-  text diverges from a possible match (extra non-matching content, or a
-  `done` event arrives first) — flush all withheld text verbatim to
-  `realEmit` and return to PASSTHROUGH. This mirrors the PRD's "parsing fails
-  or the block does not match the schema" fallback.
-- **PENDING_APPROVAL**: entered once `parseExecRequest` returns a well-formed
-  request. The interceptor:
-  1. Emits a `heartbeat` event on a fixed interval (reusing the `AdapterEvent`
-     type already used elsewhere for keep-alives, e.g. `index.ts:1420`) so the
-     open SSE connection to Codex does not idle out while awaiting approval.
-  2. Calls `deps.runCommand(deps.approvalGateway, request, deps.workspaceCwd)`
-     — the exact same `src/hil/exec.ts` function the dev-chat prototype uses,
-     unchanged. This always resolves (never throws) to either a formatted
-     `[EXEC_RESULT]` block or `EXEC_REJECTED_TEXT`.
-  3. Calls `deps.requestResume(resultText)`, which the adapter wires to
-     `worker.run`'s new `prepareResume` callback (§6) to continue the same
-     live browser turn.
-  4. Resets to PASSTHROUGH so the resumed turn's subsequent deltas flow
-     through normally.
+- `turn.hilExecGate` is only ever set when `config.hilEnabled` (§3); absent,
+  behavior is byte-for-byte unchanged from today.
+- `check(finalText)` returning `{ action: "finalize" }` proceeds exactly as
+  today (no EXEC_REQUEST present, or the gate is not engaged).
+- `{ action: "resume", followUpText }`: instead of finalizing, `runBrowserTurn`
+  recaptures a submission baseline (`captureSubmissionBaseline`, the same call
+  the multipart staged-submission path already makes per stage, `:4534`),
+  calls `attachPromptWithCompactionRetry`/`sendAttachedPrompt` (`:4646-4719`,
+  already safe to call more than once per turn — the multipart path proves
+  this) to type and submit `followUpText` into the same open page, rebinds
+  `waitForNewAssistantTurn` for the new assistant response, resets the
+  `ChatGptCompletionTracker`/`ChatGptTurnDomHealthTracker` instances (fresh
+  debounce windows for the new response), and loops back into DOM polling.
+  The whole exchange — including any number of further EXEC_REQUEST rounds —
+  stays inside this one `runBrowserTurn`/`worker.run()` call; `browser` does
+  not resolve until a `check()` call finally returns `{ action: "finalize" }`.
 
-If `deps.abortSignal` fires while in PENDING_APPROVAL (Codex disconnected, or
-the browser turn was cancelled for any other reason), the interceptor stops
-waiting on the approval gateway's result — it does not call
-`requestResume` (the turn is already gone) and does not throw. `runCommand`'s
-own promise is not force-cancelled (a running command finishes on its own
-timeout); its result is simply discarded once the signal fires.
+**`HilExecGate.check`'s implementation** lives in a new, much smaller module,
+`src/adapters/chatgpt-web/hil-interceptor.ts`:
+`createHilExecGate(deps): HilExecGate`, where
+`deps = { approvalGateway, runCommand: typeof runApprovedCommand, workspaceCwd }`
+(all from `src/hil/*`, unchanged). `check(finalText)` calls
+`parseExecRequest(finalText)` (`src/hil/protocol.ts`); on no match, returns
+`{ action: "finalize" }`; on a match, calls
+`runCommand(approvalGateway, request, workspaceCwd)` (`src/hil/exec.ts`,
+already never-throws) and returns
+`{ action: "resume", followUpText: <the resolved [EXEC_RESULT] block or
+EXEC_REJECTED_TEXT> }`.
 
-## 6. Wiring into `index.ts`
+**Timeout/stall tolerance.** Two existing mechanisms would otherwise misfire
+during the (unbounded) approval wait and (bounded, ≤60s) execution:
+1. `turnTimeoutMs`'s deadline check (`:4364-4366`, `:4791-4793`) is a hard,
+   no-grace `throw`. When `config.hilEnabled`, the adapter passes
+   `turnTimeoutMs: undefined` for HIL-active turns (no deadline), matching how
+   `dev chat` already sets an effectively unbounded timeout
+   (`src/dev-chat/driver.ts:417`, one hour) for the same reason.
+2. `ChatGptTurnDomHealthTracker`'s 60-second "text present, no completion
+   action" and "response DOM missing" grace windows (`:1442-1519`) already
+   have a suspension mechanism: `externalProgressLive` (`:1473-1480`)
+   suppresses all three windows while MCP tool activity is recent. This spec
+   reuses that same suspension signal — while `hilExecGate.check(...)` has an
+   outstanding promise (from the moment `completionReady` first fires through
+   resume-and-loop), the tracker is told activity is live via the same
+   `externalProgressLive`-shaped signal, so its grace windows do not expire
+   mid-approval. `ChatGptCompletionTracker`'s 2-second stability debounce is
+   unaffected by this suspension — it already runs *before* `hilExecGate` is
+   consulted, which is the correct order: text must be stable before the gate
+   inspects it for a complete `[EXEC_REQUEST]` block.
 
-In the `!mode.localTools` branch (`src/adapters/chatgpt-web/index.ts:672`),
-when `config.hilEnabled`:
+## 6. Suppressing protocol text from Codex's transcript
 
-- Wrap `emit` via `createHilInterceptor(emit, { ...deps })` before it reaches
-  `worker.run`'s `onTextDelta`/other callbacks — i.e., the interceptor sits
-  between the adapter's own event construction and the real `emit` the bridge
-  observes.
-- Add a `prepareResume` callback to the `worker.run({...})` call at
-  `index.ts:672-700`, mirroring the tool-capable branch's existing
-  `prepareResume` (`index.ts:~730`): given the interceptor's result text, it
-  builds a `CodexParsedRequest`-shaped follow-up input the same way
-  `prepareWith`/`compileChatGptWebPrompt` already does for a resumed turn, and
-  `worker.run` submits it into the same open browser session.
-- When `config.hilEnabled` is false (the common case — headless daemon,
-  `full` mode, or HIL not requested), `emit` passes through unwrapped and
-  `prepareResume` is omitted, exactly matching today's behavior. This is the
-  only conditional; no other code path changes.
+Separately from the exec gate (which operates on debounced, complete text
+inside `browser-worker.ts`), the daemon must not let the raw
+`[EXEC_REQUEST]...[/EXEC_REQUEST]` block reach Codex as ordinary assistant
+text — Codex only ever sees the human-facing conversation. A small filter
+wraps `emit` in the `!mode.localTools` branch (`src/adapters/chatgpt-web/index.ts:672`)
+only when `config.hilEnabled`: it accumulates `text_delta` text since the last
+flush, and withholds forwarding once the accumulated text starts matching
+`[EXEC_REQUEST` (prefix match); if the block later fails to close/parse, it
+flushes the withheld text verbatim (ordinary output, not a real protocol
+block); if it *does* parse as a complete `[EXEC_REQUEST]` (mirroring
+`parseExecRequest`'s own criteria, so the two checks never disagree), the
+withheld text is dropped rather than flushed, and delta forwarding resumes
+normally once `hilExecGate`'s resume/finalize decision produces further
+`onTextDelta` calls for the (real, human-facing) continuation. This filter is
+pure text bookkeeping with no async waiting of its own — all approval/exec
+timing lives in §5's `hilExecGate`, not here. When `config.hilEnabled` is
+false, `emit` passes through unwrapped, exactly matching today's behavior.
 
-`src/bridge.ts` and `src/adapters/chatgpt-web/browser-worker.ts` are
-unmodified by this design.
+`src/bridge.ts` is unmodified by this design. `src/adapters/chatgpt-web/browser-worker.ts`
+is modified only as described in §5 (a new optional `hilExecGate` field and
+loop branch, gated entirely behind its presence).
 
 ## 7. Execution mechanics
 
@@ -181,25 +224,51 @@ timeout reported as a synthetic non-zero exit.
   `tests/hil-*.test.ts` unchanged (import paths updated), plus a
   `tests/dev-chat.test.ts` regression pass to confirm the re-export move
   didn't change dev-chat's own behavior.
-- `tests/hil-interceptor.test.ts` (new): drive `createHilInterceptor` with a
-  scripted sequence of fake `AdapterEvent`s and injected fake
-  `approvalGateway`/`runCommand`/`requestResume`, asserting the exact emitted
-  sequence for: clean passthrough (no `[` at all), a `[`-prefixed delta that
-  turns out not to match (flush), a full approve→run→resume cycle, a reject
-  cycle, and an abort-signal-during-PENDING_APPROVAL case (no `requestResume`
-  call).
-- One test extending the existing `chatgpt-web` adapter test suite (using its
-  existing browser-worker test double, e.g. patterns from
-  `tests/browser-worker-contract.test.ts`) exercising `index.ts`'s
-  `!mode.localTools` branch with `hilEnabled: true`: confirms `prepareResume`
-  is invoked with the interceptor's formatted result text and that the
-  turn's final `done` event still reaches the bridge.
-- No changes to `bridge.ts`'s or `browser-worker.ts`'s own test suites, since
-  neither file changes.
+- `tests/hil-exec-gate.test.ts` (new): drive `createHilExecGate(...).check(text)`
+  directly with injected fake `approvalGateway`/`runCommand`, asserting: no
+  match returns `{ action: "finalize" }`; a well-formed block returns
+  `{ action: "resume", followUpText }` with the exact approve/run or reject
+  formatting from `src/hil/*` (unchanged, already covered by their own tests —
+  this test only checks the gate's own translation into `HilExecGate`'s
+  return shape).
+- `tests/hil-emit-filter.test.ts` (new): drive the §6 emit-wrapping filter
+  with a scripted sequence of fake `text_delta`s, asserting the exact
+  forwarded sequence for: clean passthrough (no `[` at all), a `[`-prefixed
+  delta that turns out not to match (flush verbatim), and a delta sequence
+  that completes a real `[EXEC_REQUEST]` block (withheld, never flushed).
+- `tests/browser-worker-hil-gate.test.ts` (new, extending the existing
+  `browser-worker-contract.test.ts` test-double harness): exercises
+  `runBrowserTurn`'s new loop branch directly — a `hilExecGate` that returns
+  `resume` once then `finalize`, asserting `attachPrompt`/`sendAttachedPrompt`
+  are invoked a second time with the follow-up text, `waitForNewAssistantTurn`
+  is rebound, and the turn's final `browser` promise resolves only after the
+  second `finalize`. A second case confirms `turnTimeoutMs`'s deadline check
+  does not fire during a simulated long approval wait, and a third confirms
+  `ChatGptTurnDomHealthTracker`'s grace windows do not expire while
+  `hilExecGate.check(...)` is pending.
+- One test extending the existing `chatgpt-web` adapter test suite exercising
+  `index.ts`'s `!mode.localTools` branch with `hilEnabled: true`, using a fake
+  browser-worker double: confirms `turn.hilExecGate` is wired to
+  `createHilExecGate(...)` and `turnTimeoutMs` is passed as `undefined`.
+- No changes to `bridge.ts`'s own test suite, since that file is unmodified.
+  `browser-worker-contract.test.ts` itself is unmodified — the new coverage
+  lives in the new `browser-worker-hil-gate.test.ts` file to keep the new
+  surface's tests isolated from the existing large contract suite.
 
 ## 10. Non-goals
 
-- No changes to `src/bridge.ts` or `src/adapters/chatgpt-web/browser-worker.ts`.
+- No changes to `src/server.ts`'s request-processing/SSE logic beyond the
+  new `--hil` startup flag plumbing (§3, §8); no changes at all to
+  `src/bridge.ts`, round/session journaling
+  (`src/adapters/chatgpt-web/turn-execution.ts`), or the existing
+  `prepareResume`/`retainConversation`/`completionFence` mechanisms — this
+  design adds a new, independent `hilExecGate` hook alongside them rather
+  than reusing or modifying them.
+- `src/adapters/chatgpt-web/browser-worker.ts` gains exactly one new optional
+  field (`hilExecGate` on `BrowserTurn`) and one new loop branch gated behind
+  it (§5); every other line of that file's behavior is unchanged when
+  `hilExecGate` is absent, which is the case for every non-HIL turn (all of
+  `full` mode, and any `browser-only` turn without `--hil`).
 - No change to `full` mode, the MCP connector, or the OpenAI Tunnel — HIL
   remains exclusively a `browser-only`-mode feature (per the approved scope
   decision; the PRD's framing of HIL as a full tunnel/MCP replacement is
