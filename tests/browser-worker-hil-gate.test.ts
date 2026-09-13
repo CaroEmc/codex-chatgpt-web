@@ -8,6 +8,30 @@ import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import type { HilExecGate } from "../src/adapters/chatgpt-web/hil-interceptor";
 import type { CodexProviderConfig } from "../src/types";
 
+/**
+ * The stub surface this harness drives `runBrowserTurn` through. Deliberately *not* expressed as
+ * an intersection with `ChatGptBrowserWorker` — TS collapses `ClassType & { privateMember: X }`
+ * to `never` whenever the object-literal member name collides with a private class member, which
+ * every method stubbed below does. Casting straight to this standalone type (via `unknown`) is
+ * what keeps `bun run typecheck` clean; `worker`'s real prototype methods are still installed for
+ * the class's own use, this type just describes the seam this file replaces on the instance.
+ */
+type WorkerStubSurface = {
+  runBrowserTurn: (
+    turn: BrowserTurn,
+    launcherSurfaceId?: string,
+    maintenancePage?: Page,
+    reuseConversation?: boolean,
+  ) => Promise<string>;
+  prepareTemporaryChatSurface: (...args: unknown[]) => Promise<void>;
+  selectModelAndEffort: (...args: unknown[]) => Promise<unknown>;
+  captureSubmissionBaseline: (...args: unknown[]) => Promise<unknown>;
+  attachPromptWithCompactionRetry: (...args: unknown[]) => Promise<void>;
+  sendAttachedPrompt: (...args: unknown[]) => Promise<string>;
+  waitForNewAssistantTurn: (...args: unknown[]) => Promise<unknown>;
+  responseDomSnapshot: (...args: unknown[]) => Promise<unknown>;
+};
+
 // A minimal chainable Playwright-Locator-shaped stub. The completion loop and its guard
 // functions (throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert, the stop
 // button probe) only ever call `.filter()/.getByText()/.getByTestId()/.getByRole()/.last()`
@@ -29,7 +53,7 @@ function chainable(): any {
 }
 
 interface Harness {
-  worker: ChatGptBrowserWorker;
+  worker: WorkerStubSurface;
   page: Page;
   diagnosticsRoot: string;
   attachCalls: { prompt: string }[];
@@ -64,21 +88,7 @@ function buildHarness(options: {
       ...(options.turnTimeoutMs !== undefined ? { turnTimeoutMs: options.turnTimeoutMs } : {}),
     },
   };
-  const worker = ChatGptBrowserWorker.forProvider(provider) as unknown as ChatGptBrowserWorker & {
-    prepareTemporaryChatSurface: (...args: unknown[]) => Promise<void>;
-    selectModelAndEffort: (...args: unknown[]) => Promise<unknown>;
-    captureSubmissionBaseline: (...args: unknown[]) => Promise<unknown>;
-    attachPromptWithCompactionRetry: (...args: unknown[]) => Promise<void>;
-    sendAttachedPrompt: (...args: unknown[]) => Promise<string>;
-    waitForNewAssistantTurn: (...args: unknown[]) => Promise<unknown>;
-    responseDomSnapshot: (...args: unknown[]) => Promise<unknown>;
-    runBrowserTurn: (
-      turn: BrowserTurn,
-      launcherSurfaceId?: string,
-      maintenancePage?: Page,
-      reuseConversation?: boolean,
-    ) => Promise<string>;
-  };
+  const worker = ChatGptBrowserWorker.forProvider(provider) as unknown as WorkerStubSurface;
 
   const page = {
     isClosed: () => false,
@@ -209,6 +219,48 @@ test("a resume verdict submits the exact follow-up text, and the turn only final
     ]);
     expect(harness.sendCalls).toBe(2);
     expect(finalText).toBe("second answer");
+  } finally {
+    harness.cleanup();
+  }
+}, 20_000);
+
+test("two consecutive resume rounds stay inside one runBrowserTurn call without accumulating stale state", async () => {
+  const harness = buildHarness({ responses: ["first answer", "second answer", "third answer"] });
+  try {
+    const checks: string[] = [];
+    let finalized = false;
+    const hilExecGate: HilExecGate = {
+      async check(finalText) {
+        checks.push(finalText);
+        if (checks.length === 1) {
+          return { action: "resume", followUpText: "[EXEC_RESULT]\nfirst\n[/EXEC_RESULT]" };
+        }
+        if (checks.length === 2) {
+          return { action: "resume", followUpText: "[EXEC_RESULT]\nsecond\n[/EXEC_RESULT]" };
+        }
+        finalized = true;
+        return { action: "finalize" };
+      },
+    };
+
+    const finalText = await harness.runTurn({
+      onTextDelta: () => {},
+      hilExecGate,
+    });
+
+    expect(checks).toEqual(["first answer", "second answer", "third answer"]);
+    expect(finalized).toBeTrue();
+    // A third attach+send round for the second follow-up proves the loop kept resuming inside
+    // this single runBrowserTurn call rather than only surviving exactly one round; a reset that
+    // works once but silently leaves stale state (e.g. completionFenceRevision or
+    // responseDomCache) would otherwise misfire or hang on this second resume.
+    expect(harness.attachCalls.map(call => call.prompt)).toEqual([
+      "Hello Codex",
+      "[EXEC_RESULT]\nfirst\n[/EXEC_RESULT]",
+      "[EXEC_RESULT]\nsecond\n[/EXEC_RESULT]",
+    ]);
+    expect(harness.sendCalls).toBe(3);
+    expect(finalText).toBe("third answer");
   } finally {
     harness.cleanup();
   }
