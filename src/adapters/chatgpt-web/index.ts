@@ -1164,7 +1164,19 @@ export function createChatGptWebAdapter(
           produce(buffer);
           emitRoundEvents(events);
         };
-        const emitRoundEvent = (event: AdapterEvent): void => emitRoundEvents([event]);
+        const emitRoundEvent = (event: AdapterEvent): void => {
+          // Route single (typically error/terminal) events through the same filter indirection
+          // as emitRoundBatch: `event` is never itself a `text_delta`, so passing it through
+          // `hilRoundFilter` (rather than calling `emitRoundEvents([event])` directly, which
+          // would bypass the filter) flushes any text still buffered from an earlier batch in
+          // this round before appending `event`, so a round that ends here never silently drops
+          // buffered tail text.
+          const events: AdapterEvent[] = [];
+          batchSink = pending => events.push(pending);
+          const buffer = hilRoundFilter ?? batchSink;
+          buffer(event);
+          emitRoundEvents(events);
+        };
         try {
           await session.runExclusive(async () => {
             const replay = session.roundEvents(roundKey);
@@ -1201,7 +1213,16 @@ export function createChatGptWebAdapter(
                   emitRoundBatch(buffer => emitTextDeltas(completedTextDeltas, buffer));
                 }
               }
-              if (session.runtime.text.value() !== settled.answer) {
+              // A HIL resume round resets the browser worker's own markdown buffer, so its
+              // resolved answer reflects only the last round while `session.runtime.text`
+              // accumulates every round's onTextDelta pushes (including the withheld
+              // EXEC_REQUEST round(s)). Require only that the cumulative feed ends with the
+              // last round's answer rather than exactly equalling it; non-HIL sessions keep the
+              // strict equality check.
+              const reproducedFinalAnswer = hilFilterActive
+                ? session.runtime.text.value().endsWith(settled.answer)
+                : session.runtime.text.value() === settled.answer;
+              if (!reproducedFinalAnswer) {
                 throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
               }
               structuredOutputValidator?.(settled.answer);
@@ -1310,7 +1331,13 @@ export function createChatGptWebAdapter(
                 session.setFinalEvents(session.roundEvents(roundKey));
                 if (turnToken) await broker.revoke(turnToken);
                 if (completedOutcome.type === "error") throw completedOutcome.error;
-                if (session.runtime.text.value() !== completedOutcome.answer) {
+                // See the matching comment on the initial-settled fast path above: a HIL resume
+                // round resets the browser worker's markdown buffer, so `completedOutcome.answer`
+                // reflects only the last round while the cumulative feed carries every round.
+                const reproducedFinalAnswer = hilFilterActive
+                  ? session.runtime.text.value().endsWith(completedOutcome.answer)
+                  : session.runtime.text.value() === completedOutcome.answer;
+                if (!reproducedFinalAnswer) {
                   throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
                 }
                 structuredOutputValidator?.(completedOutcome.answer);

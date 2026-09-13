@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ChatGptWebAdapterError } from "../src/adapters/chatgpt-web/adapter-error";
 import { ChatGptBrowserWorker, type BrowserTurn } from "../src/adapters/chatgpt-web/browser-worker";
 import { createChatGptWebAdapter } from "../src/adapters/chatgpt-web/index";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
@@ -140,13 +141,15 @@ test(
     const postText = "Found 3 files; the project builds cleanly.";
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = turn => {
       // Simulate browser-worker's real multi-round HIL behavior (Task 5): every round's text
-      // is delivered via onTextDelta as it streams, but the eventual resolved promise carries
-      // only the LAST round's text -- never the full multi-round accumulation. The accumulated
-      // text/trace arrays built from onTextDelta are what must carry the full exchange forward.
+      // is delivered via onTextDelta as it streams (browser-worker resets its own markdown
+      // buffer on every HIL resume), but the eventual resolved promise carries ONLY the LAST
+      // round's text -- never the full multi-round accumulation. This is the exact shape Task 5's
+      // reviewer flagged: the accumulated text/trace arrays built from onTextDelta (not the
+      // return value) are what must carry the full exchange forward to emit.
       turn.onTextDelta(preText);
       turn.onTextDelta(execBlock);
       turn.onTextDelta(postText);
-      return Promise.resolve(preText + execBlock + postText);
+      return Promise.resolve(postText);
     };
     try {
       const adapter = createChatGptWebAdapter(provider);
@@ -163,6 +166,51 @@ test(
       expect(emittedText).not.toContain("[EXEC_REQUEST");
       expect(emittedText).not.toContain("[/EXEC_REQUEST]");
       expect(emittedText).toBe(preText + postText);
+      expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
+    } finally {
+      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+      chatGptTurnSessions.clear();
+      await TurnBroker.forSocket(provider.chatgptWeb!.brokerSocketPath!).close();
+    }
+  },
+);
+
+test(
+  "text buffered by the HIL emit filter is flushed, not silently dropped, when the round ends "
+  + "via the error path instead of another emitRoundBatch call",
+  async () => {
+    const provider = browserOnlyProvider({ hilEnabled: true });
+    const worker = ChatGptBrowserWorker.forProvider(provider);
+    const originalRun = worker.run.bind(worker);
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = turn => {
+      // A lone "[" is a strict prefix of "[EXEC_REQUEST", so the filter holds it back pending
+      // more text to disambiguate. Draining this delta (via the incremental text-wait loop)
+      // leaves it buffered inside the round's shared filter instance; the round then ends via
+      // the error path (`emitRoundEvent`) instead of another emitRoundBatch call, which used to
+      // bypass the filter entirely and silently drop the buffered "[".
+      turn.onTextDelta("[");
+      return new Promise<string>((_resolve, reject) => {
+        setTimeout(() => reject(new ChatGptWebAdapterError("simulated upstream stall", {
+          status: 502,
+          errorType: "server_error",
+          code: "test_simulated_stall",
+          retryable: false,
+        })), 30);
+      });
+    };
+    try {
+      const adapter = createChatGptWebAdapter(provider);
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(rawWireRequest(), { headers: new Headers() }, event => events.push(event));
+
+      const emittedText = events
+        .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => (
+          event.type === "text_delta" && event.phase === "final_answer"
+        ))
+        .map(event => event.text)
+        .join("");
+      expect(emittedText).toBe("[");
+      expect(events.at(-1)).toMatchObject({ type: "error", code: "test_simulated_stall" });
     } finally {
       (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
       chatGptTurnSessions.clear();

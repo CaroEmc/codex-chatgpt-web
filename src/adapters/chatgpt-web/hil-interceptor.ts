@@ -39,14 +39,24 @@ export function createHilExecGate(deps: HilExecGateDeps): HilExecGate {
 export function createHilEmitFilter<TEvent extends { type: string; text?: string }>(
   realEmit: (event: TEvent) => void,
 ): (event: TEvent) => void {
+  // Buffer the actual candidate `text_delta` events (not just their concatenated text) so a
+  // flush can replay them verbatim -- including `phase` and any other fields the caller attached
+  // -- instead of synthesizing a bare `{ type: "text_delta", text }` that silently drops them.
+  // Dropping `phase` matters beyond cosmetics: bridge.ts closes/reopens transcript output items
+  // on a phase change, so a flushed-but-rephrased event fragments the transcript.
+  let bufferedEvents: TEvent[] = [];
   let buffered = "";
+
+  const flushBuffered = (): void => {
+    for (const bufferedEvent of bufferedEvents) realEmit(bufferedEvent);
+    bufferedEvents = [];
+    buffered = "";
+  };
+
   return (event: TEvent) => {
     if (event.type !== "text_delta" || typeof event.text !== "string") {
       // Non-text event: flush buffered and pass through
-      if (buffered) {
-        realEmit({ type: "text_delta", text: buffered } as TEvent);
-        buffered = "";
-      }
+      flushBuffered();
       realEmit(event);
       return;
     }
@@ -56,6 +66,7 @@ export function createHilEmitFilter<TEvent extends { type: string; text?: string
     // Check if we have a complete, well-formed protocol block
     if (parseExecRequest(candidate)) {
       // Drop it entirely
+      bufferedEvents = [];
       buffered = "";
       return;
     }
@@ -63,6 +74,7 @@ export function createHilEmitFilter<TEvent extends { type: string; text?: string
     // Check if we're in the middle of building a protocol block (has opening tag)
     if (candidate.includes("[EXEC_REQUEST")) {
       // Buffer to wait for closing tag
+      bufferedEvents.push(event);
       buffered = candidate;
       return;
     }
@@ -75,6 +87,7 @@ export function createHilEmitFilter<TEvent extends { type: string; text?: string
 
     // If buffered text is a strict prefix of "[EXEC_REQUEST", keep building
     if (buffered && "[EXEC_REQUEST".startsWith(buffered)) {
+      bufferedEvents.push(event);
       buffered = candidate;
       return;
     }
@@ -84,18 +97,17 @@ export function createHilEmitFilter<TEvent extends { type: string; text?: string
     // - buffered is empty but candidate contains "["
     // In both cases, we need to emit the buffered content (if any) without duplication
 
-    // Flush any buffered content first (it's not part of a protocol block)
-    if (buffered) {
-      realEmit({ type: "text_delta", text: buffered } as TEvent);
-    }
+    // Flush any buffered content first (it's not part of a protocol block); replaying the
+    // original buffered events preserves each one's own `phase`/other fields verbatim.
+    flushBuffered();
 
     // Now check if the new event text alone is a potential prefix of "[EXEC_REQUEST"
     if ("[EXEC_REQUEST".startsWith(event.text)) {
       // Could be starting a protocol block, buffer it
+      bufferedEvents = [event];
       buffered = event.text;
     } else {
       // Not a prefix, emit the new event directly
-      buffered = "";
       realEmit(event);
     }
   };

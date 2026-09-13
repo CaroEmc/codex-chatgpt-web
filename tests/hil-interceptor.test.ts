@@ -84,6 +84,32 @@ test("createHilEmitFilter handles bracketed text split across calls without dupl
   ]);
 });
 
+test("createHilEmitFilter preserves each flushed event's phase across a multi-delta bracket buffer", () => {
+  // Reproduces a lone "[" landing on a delta boundary (e.g. inside a markdown link like
+  // "See [docs](url)"), which the filter holds back pending more text since "[" is a strict
+  // prefix of "[EXEC_REQUEST". Once later text proves it was never a protocol block, the filter
+  // must flush the buffered events verbatim -- phase and all -- rather than synthesizing a bare
+  // `{ type: "text_delta", text }` that silently drops `phase` (bridge.ts closes/reopens output
+  // items on a phase change, so a dropped phase fragments the transcript).
+  type TestEvent = { type: string; text?: string; phase?: string };
+  const seen: TestEvent[] = [];
+  const filtered = createHilEmitFilter<TestEvent>(event => seen.push(event));
+  filtered({ type: "text_delta", text: "See ", phase: "final_answer" });
+  filtered({ type: "text_delta", text: "[", phase: "final_answer" });
+  filtered({ type: "text_delta", text: "docs](url) for details", phase: "final_answer" });
+  filtered({ type: "text_delta", text: " more text", phase: "final_answer" });
+
+  const reconstructed = seen.map(event => event.text ?? "").join("");
+  expect(reconstructed).toBe("See [docs](url) for details more text");
+  expect(seen.every(event => event.phase === "final_answer")).toBe(true);
+  expect(seen).toEqual([
+    { type: "text_delta", text: "See ", phase: "final_answer" },
+    { type: "text_delta", text: "[", phase: "final_answer" },
+    { type: "text_delta", text: "docs](url) for details", phase: "final_answer" },
+    { type: "text_delta", text: " more text", phase: "final_answer" },
+  ]);
+});
+
 test("createHilEmitFilter handles EXEC_REQUEST split mid-token across calls", () => {
   const seen: unknown[] = [];
   const filtered = createHilEmitFilter(event => seen.push(event));
