@@ -38,7 +38,8 @@ export type DevChatEvent =
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; receipt: Record<string, unknown> }
   | { type: "compaction_start"; reason: "automatic" | "manual"; inputItems: number }
-  | { type: "compaction_done"; reason: "automatic" | "manual"; inputItems: number };
+  | { type: "compaction_done"; reason: "automatic" | "manual"; inputItems: number }
+  | { type: "hil_exec"; command: string; resultText: string };
 
 export interface DevContextStatus {
   model: DevChatModel;
@@ -429,8 +430,15 @@ export class DevChatDriver {
     readonly adapterFactory: AdapterFactory,
     readonly cwd = process.cwd(),
     readonly features: DevChatFeatures = DEFAULT_DEV_CHAT_FEATURES,
-    private readonly approvalGateway: ApprovalGateway = new TtyApprovalGateway(),
+    private approvalGateway: ApprovalGateway = new TtyApprovalGateway(),
   ) {}
+
+  /** Swaps the gateway used to approve EXEC_REQUESTs, e.g. so an interactive REPL
+   * can hand the driver a gateway that shares the REPL's own `readline.Interface`
+   * instead of one that would open a second reader on the same stdin. */
+  setApprovalGateway(gateway: ApprovalGateway): void {
+    this.approvalGateway = gateway;
+  }
 
   open(name: string, requestedModel?: DevChatModel): { state: DevChatState; created: boolean } {
     const model = requestedModel ?? defaultDevChatModel(this.config);
@@ -533,8 +541,14 @@ export class DevChatDriver {
     let totalToolCalls = 0;
     const usage: DevChatUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     let finalText = "";
+    // HIL local execution must never be live under full mode's real outer tools, even if a
+    // named chat's persisted `hilEnabled` flag was set while the DEV profile was previously in
+    // browser-only mode. `setHil` already blocks turning HIL on under full mode, but a chat
+    // opened after the profile is reconfigured to full mode would otherwise still have this
+    // round loop parse/execute an EXEC_REQUEST if one somehow appeared in the model output.
+    const hilActive = state.hilEnabled && this.config.mode !== "full";
     for (let round = 0; round < 64; round += 1) {
-      const body = requestBody(state, this.cwd, turnId, workingInput, false, this.config.mode === "full", state.hilEnabled);
+      const body = requestBody(state, this.cwd, turnId, workingInput, false, this.config.mode === "full", hilActive);
       const response = await responseRequest(new Request("http://codex-web-gpt.dev/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -558,9 +572,10 @@ export class DevChatDriver {
           throw new Error("DEV Responses turn completed without tool calls or end_turn=true");
         }
         const roundText = outputText(output);
-        const execRequest = state.hilEnabled ? parseExecRequest(roundText) : undefined;
+        const execRequest = hilActive ? parseExecRequest(roundText) : undefined;
         if (execRequest) {
           const resultText = await runApprovedCommand(this.approvalGateway, execRequest, this.cwd);
+          emit({ type: "hil_exec", command: execRequest.command, resultText });
           workingInput.push({
             type: "message",
             id: id("msg_dev_hil"),
