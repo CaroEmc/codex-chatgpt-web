@@ -138,6 +138,16 @@ test("named DEV state and deterministic context filler persist independently", (
   expect(store.load("compaction-lab")).toMatchObject({ input: [], turns: 0, syntheticFills: 0 });
 });
 
+test("hilEnabled defaults to false and persists once set", () => {
+  const root = scratch("cgw-dev-hil-state");
+  const store = new DevChatStore(join(root, "chats"));
+  const opened = store.loadOrCreate("hil-lab", "chatgpt-web/high", root);
+  expect(opened.state.hilEnabled).toBe(false);
+  opened.state.hilEnabled = true;
+  store.save(opened.state);
+  expect(store.load("hil-lab")).toMatchObject({ hilEnabled: true });
+});
+
 test("coherent DEV MCP payloads are bounded, deterministic, and distinct", () => {
   const first = createDevCoherentContextPayload(1, 3_000);
   const repeated = createDevCoherentContextPayload(1, 3_000);
