@@ -48,11 +48,16 @@ export async function runApprovedCommand(
   const resolvedCwd = resolveWorkspaceCwd(request, workspaceCwd);
   if (!resolvedCwd) return EXEC_REJECTED_TEXT;
 
-  const decision = await gateway.request({
-    command: request.command,
-    cwd: resolvedCwd,
-    reason: request.reason,
-  });
+  let decision;
+  try {
+    decision = await gateway.request({
+      command: request.command,
+      cwd: resolvedCwd,
+      reason: request.reason,
+    });
+  } catch {
+    return EXEC_REJECTED_TEXT;
+  }
   if (decision.action === "reject") return EXEC_REJECTED_TEXT;
 
   const { exitCode, output } = await spawnAndCapture(decision.command, resolvedCwd);

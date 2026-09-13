@@ -83,6 +83,22 @@ test("a cwd escaping the workspace is rejected before reaching approval", async 
   }
 });
 
+test("a gateway that throws is treated as a rejection and never crashes the caller", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  try {
+    class ThrowingGateway implements ApprovalGateway {
+      async request(): Promise<ApprovalDecision> {
+        throw new Error("socket disconnected");
+      }
+    }
+    const gateway = new ThrowingGateway();
+    const result = await runApprovedCommand(gateway, { command: "printf should-not-run" }, workspace);
+    expect(result).toBe(EXEC_REJECTED_TEXT);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("an omitted cwd defaults to the workspace root", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
   try {
