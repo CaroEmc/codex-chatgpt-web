@@ -69,3 +69,27 @@ test("createHilEmitFilter flushes verbatim when a [-prefixed delta turns out not
   filtered({ type: "text_delta", text: "[not a protocol block]" });
   expect(seen).toEqual([{ type: "text_delta", text: "[not a protocol block]" }]);
 });
+
+test("createHilEmitFilter handles bracketed text split across calls without duplication", () => {
+  const seen: unknown[] = [];
+  const filtered = createHilEmitFilter(event => seen.push(event));
+  filtered({ type: "text_delta", text: "see [" });
+  filtered({ type: "text_delta", text: "1] for details" });
+  // Reconstruct emitted text
+  const reconstructed = seen.map(e => e.text || "").join("");
+  expect(reconstructed).toBe("see [1] for details");
+  expect(seen).toEqual([
+    { type: "text_delta", text: "see [" },
+    { type: "text_delta", text: "1] for details" },
+  ]);
+});
+
+test("createHilEmitFilter handles EXEC_REQUEST split mid-token across calls", () => {
+  const seen: unknown[] = [];
+  const filtered = createHilEmitFilter(event => seen.push(event));
+  filtered({ type: "text_delta", text: "[EXEC_REQ" });
+  filtered({ type: "text_delta", text: "UEST]\ncommand: ls\n[/EXEC_REQUEST]" });
+  filtered({ type: "done" });
+  // Should only see the done event, protocol block is withheld
+  expect(seen).toEqual([{ type: "done" }]);
+});

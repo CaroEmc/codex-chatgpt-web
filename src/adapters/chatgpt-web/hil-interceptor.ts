@@ -40,43 +40,63 @@ export function createHilEmitFilter<TEvent extends { type: string; text?: string
   realEmit: (event: TEvent) => void,
 ): (event: TEvent) => void {
   let buffered = "";
-  const flush = () => {
-    if (buffered) realEmit({ type: "text_delta", text: buffered } as TEvent);
-    buffered = "";
-  };
   return (event: TEvent) => {
     if (event.type !== "text_delta" || typeof event.text !== "string") {
-      flush();
+      // Non-text event: flush buffered and pass through
+      if (buffered) {
+        realEmit({ type: "text_delta", text: buffered } as TEvent);
+        buffered = "";
+      }
       realEmit(event);
       return;
     }
+
     const candidate = buffered + event.text;
-    if (!candidate.includes("[") && !buffered) {
-      realEmit(event);
-      return;
-    }
-    const prefixIndex = candidate.indexOf("[EXEC_REQUEST");
-    if (prefixIndex === -1 && !candidate.startsWith("[") && !"[EXEC_REQUEST".startsWith(candidate.slice(-1))) {
-      flush();
-      buffered = candidate;
-      flush();
-      return;
-    }
-    buffered = candidate;
-    if (parseExecRequest(buffered)) {
+
+    // Check if we have a complete, well-formed protocol block
+    if (parseExecRequest(candidate)) {
+      // Drop it entirely
       buffered = "";
       return;
     }
-    // Check if buffered starts with [ but can't possibly be EXEC_REQUEST
-    if (buffered.startsWith("[")) {
-      // It's a potential prefix if [EXEC_REQUEST starts with it, or it starts with [EXEC_REQUEST
-      if (!"[EXEC_REQUEST".startsWith(buffered) && !buffered.startsWith("[EXEC_REQUEST")) {
-        flush();
-        return;
-      }
+
+    // Check if we're in the middle of building a protocol block (has opening tag)
+    if (candidate.includes("[EXEC_REQUEST")) {
+      // Buffer to wait for closing tag
+      buffered = candidate;
+      return;
     }
-    if (buffered.includes("[/EXEC_REQUEST]") && !parseExecRequest(buffered)) {
-      flush();
+
+    // Fast path: no brackets and no buffered content
+    if (!buffered && !candidate.includes("[")) {
+      realEmit(event);
+      return;
+    }
+
+    // If buffered text is a strict prefix of "[EXEC_REQUEST", keep building
+    if (buffered && "[EXEC_REQUEST".startsWith(buffered)) {
+      buffered = candidate;
+      return;
+    }
+
+    // At this point, candidate doesn't contain [EXEC_REQUEST and either:
+    // - buffered is non-empty and not a prefix of "[EXEC_REQUEST", or
+    // - buffered is empty but candidate contains "["
+    // In both cases, we need to emit the buffered content (if any) without duplication
+
+    // Flush any buffered content first (it's not part of a protocol block)
+    if (buffered) {
+      realEmit({ type: "text_delta", text: buffered } as TEvent);
+    }
+
+    // Now check if the new event text alone is a potential prefix of "[EXEC_REQUEST"
+    if ("[EXEC_REQUEST".startsWith(event.text)) {
+      // Could be starting a protocol block, buffer it
+      buffered = event.text;
+    } else {
+      // Not a prefix, emit the new event directly
+      buffered = "";
+      realEmit(event);
     }
   };
 }
