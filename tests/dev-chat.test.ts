@@ -148,6 +148,67 @@ test("hilEnabled defaults to false and persists once set", () => {
   expect(store.load("hil-lab")).toMatchObject({ hilEnabled: true });
 });
 
+test("hilEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT back before the final answer", async () => {
+  const root = scratch("cgw-dev-hil-roundtrip");
+  const config = {
+    ...defaultConfig("browser-only"),
+    purpose: "dev-harness" as const,
+    solAvailable: true,
+    proAvailable: true,
+  };
+  let round = 0;
+  const factory = (): ProviderAdapter => ({
+    name: "dev-hil-test",
+    async runTurn(parsed, _incoming, emit) {
+      round += 1;
+      if (round === 1) {
+        emit({
+          type: "text_delta",
+          phase: "final_answer",
+          text: "[EXEC_REQUEST]\ncommand: printf hello\nreason: greet\n[/EXEC_REQUEST]",
+        });
+      } else {
+        const lastMessage = JSON.stringify(parsed.context).includes("[EXEC_RESULT]");
+        expect(lastMessage).toBe(true);
+        emit({ type: "text_delta", phase: "final_answer", text: "Done: hello" });
+      }
+      emit({
+        type: "done", stopReason: "stop", endTurn: true,
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, estimated: true },
+      });
+    },
+  });
+  const approvals: unknown[] = [];
+  const gateway = { request: async (proposal: unknown) => { approvals.push(proposal); return { action: "run" as const, command: "printf hello" }; } };
+  const driver = new DevChatDriver(
+    config,
+    new DevChatStore(join(root, "chats")),
+    factory,
+    root,
+    undefined,
+    gateway,
+  );
+  const state = driver.open("hil-roundtrip", "chatgpt-web/extra-high").state;
+  driver.setHil(state, true);
+  const result = await driver.send(state, "Please greet me.");
+  expect(result.text).toBe("Done: hello");
+  expect(approvals).toHaveLength(1);
+});
+
+test("setHil rejects enabling HIL under full mode", () => {
+  const root = scratch("cgw-dev-hil-full-mode");
+  const driver = new DevChatDriver(
+    defaultConfig("full"),
+    new DevChatStore(join(root, "chats")),
+    (_provider: CodexProviderConfig): ProviderAdapter => {
+      throw new Error("adapter is not needed for this assertion");
+    },
+    root,
+  );
+  const state = driver.open("hil-full").state;
+  expect(() => driver.setHil(state, true)).toThrow("not available");
+});
+
 test("coherent DEV MCP payloads are bounded, deterministic, and distinct", () => {
   const first = createDevCoherentContextPayload(1, 3_000);
   const repeated = createDevCoherentContextPayload(1, 3_000);

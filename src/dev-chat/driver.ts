@@ -17,6 +17,9 @@ import type { AppConfig } from "../config";
 import { parseRequest } from "../responses/parser";
 import { compactRequest, responseRequest, routeChatGptWebRequest } from "../server";
 import { namespacedToolName, type AdapterEvent, type CodexProviderConfig } from "../types";
+import { TtyApprovalGateway, type ApprovalGateway } from "./hil-approval";
+import { runApprovedCommand } from "./hil-exec";
+import { DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS, parseExecRequest } from "./hil-protocol";
 import {
   createDevCoherentContextPayload,
   createDevContextFiller,
@@ -93,6 +96,15 @@ export const DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS = [
   "You are running inside the Codex Web GPT DEV outer-harness simulator.",
   "Behave like the normal Codex model backend.",
   "This browser-only DEV profile exposes no outer tools. Do not claim that commands, file edits, UI actions, or external side effects occurred.",
+].join(" ");
+
+export const DEV_CHAT_HIL_INSTRUCTIONS = [
+  "You are running inside the Codex Web GPT DEV outer-harness simulator.",
+  "Behave like the normal Codex model backend.",
+  "This browser-only DEV profile exposes no structured outer tools, but you may request",
+  "local command execution using the protocol below; a human reviews every request before",
+  "it runs.",
+  DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS,
 ].join(" ");
 
 const ANY_ARGUMENTS = { type: "object", additionalProperties: true } as const;
@@ -190,10 +202,13 @@ function requestBody(
   input: unknown[],
   stream: boolean,
   localToolsEnabled: boolean,
+  hilEnabled: boolean,
 ): Record<string, unknown> {
   return {
     model: state.model,
-    instructions: localToolsEnabled ? DEV_CHAT_SYSTEM_INSTRUCTIONS : DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS,
+    instructions: localToolsEnabled
+      ? DEV_CHAT_SYSTEM_INSTRUCTIONS
+      : (hilEnabled ? DEV_CHAT_HIL_INSTRUCTIONS : DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS),
     input,
     tools: localToolsEnabled ? DEV_CHAT_TOOLS : [],
     tool_choice: "auto",
@@ -414,6 +429,7 @@ export class DevChatDriver {
     readonly adapterFactory: AdapterFactory,
     readonly cwd = process.cwd(),
     readonly features: DevChatFeatures = DEFAULT_DEV_CHAT_FEATURES,
+    private readonly approvalGateway: ApprovalGateway = new TtyApprovalGateway(),
   ) {}
 
   open(name: string, requestedModel?: DevChatModel): { state: DevChatState; created: boolean } {
@@ -438,6 +454,14 @@ export class DevChatDriver {
     requireChatGptWebModelRoute(model, this.config);
     this.assertBiggerContextModel(model);
     state.model = model;
+    this.store.save(state);
+  }
+
+  setHil(state: DevChatState, enabled: boolean): void {
+    if (enabled && this.config.mode === "full") {
+      throw new Error("HIL local execution is not available while full mode's real tool calls are active");
+    }
+    state.hilEnabled = enabled;
     this.store.save(state);
   }
 
@@ -510,7 +534,7 @@ export class DevChatDriver {
     const usage: DevChatUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     let finalText = "";
     for (let round = 0; round < 64; round += 1) {
-      const body = requestBody(state, this.cwd, turnId, workingInput, false, this.config.mode === "full");
+      const body = requestBody(state, this.cwd, turnId, workingInput, false, this.config.mode === "full", state.hilEnabled);
       const response = await responseRequest(new Request("http://codex-web-gpt.dev/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -533,7 +557,20 @@ export class DevChatDriver {
         if (envelope.end_turn !== true) {
           throw new Error("DEV Responses turn completed without tool calls or end_turn=true");
         }
-        finalText = outputText(output);
+        const roundText = outputText(output);
+        const execRequest = state.hilEnabled ? parseExecRequest(roundText) : undefined;
+        if (execRequest) {
+          const resultText = await runApprovedCommand(this.approvalGateway, execRequest, this.cwd);
+          workingInput.push({
+            type: "message",
+            id: id("msg_dev_hil"),
+            role: "user",
+            content: [{ type: "input_text", text: resultText }],
+            internal_chat_message_metadata_passthrough: { turn_id: turnId },
+          });
+          continue;
+        }
+        finalText = roundText;
         state.input = workingInput;
         state.turns += 1;
         state.compactions += pendingCompactions;
@@ -590,6 +627,7 @@ export class DevChatDriver {
       input,
       false,
       this.config.mode === "full",
+      state.hilEnabled,
     ));
     const route = routeChatGptWebRequest(parsed, this.config);
     const inputTokens = estimateChatGptWebInputTokens(parsed, {
