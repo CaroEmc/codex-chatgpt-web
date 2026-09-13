@@ -38,7 +38,7 @@ Usage:
   codex-chatgpt-web dev status [--json]
   codex-chatgpt-web dev setup --browser-only [--automatic-browser-interaction]
   codex-chatgpt-web dev setup --full --tunnel-id ID --runtime-key-file PATH [--automatic-browser-interaction|--zero-risk-browser-interaction]
-  codex-chatgpt-web dev chat NAME [--model MODEL] [MESSAGE]
+  codex-chatgpt-web dev chat NAME [--model MODEL] [--hil] [MESSAGE]
   codex-chatgpt-web dev list
 
 Repository shortcut:
@@ -55,6 +55,10 @@ Interactive commands:
   /reset yes           Clear this named DEV chat and create a new thread identity
   /help                Show this command list
   /exit                Exit
+
+Launch-time flags:
+  --hil                Enable human-in-the-loop local command execution for this session
+                       (no new slash command; /help lists session commands only)
 
 Experimental settings:
   Bigger Context       Enable in Settings; adapts context across 1, 2, or 3 messages
@@ -380,6 +384,7 @@ export async function runDevCommand(args: string[]): Promise<void> {
   activateDevProfileEnvironment(paths);
   const store = new DevChatStore(paths.chatsPath);
   const requestedModel = modelFromCli(takeOption(args, "--model"));
+  const hilRequested = takeFlag(args, "--hil");
   const name = args.shift();
   if (!name) throw new Error(`DEV chat name is required\n\n${DEV_HELP}`);
   const message = args.join(" ").trim();
@@ -414,6 +419,7 @@ export async function runDevCommand(args: string[]): Promise<void> {
     if (requestedModel && opened.state.model !== requestedModel) {
       driver.setModel(opened.state, requestedModel);
     }
+    if (hilRequested) driver.setHil(opened.state, true);
     printHeader(opened.state, opened.created, driver.status(opened.state), runtimeConfig.mode, features.biggerContext);
     if (message) await executeMessage(driver, opened.state, message);
     else await interactive(driver, opened.state);
