@@ -596,6 +596,8 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       experimentalBiggerContext: manual ? false : config.experimentalBiggerContext,
       ...(config.stallTimeoutSec !== undefined ? { stallTimeoutSec: config.stallTimeoutSec } : {}),
       autoApproveToolCalls: manual ? false : config.autoApproveToolCalls,
+      hilEnabled: config.hilEnabled,
+      hilWorkspaceCwd: process.cwd(),
     },
   };
 }

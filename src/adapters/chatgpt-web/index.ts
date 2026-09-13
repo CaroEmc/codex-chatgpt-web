@@ -18,11 +18,13 @@ import {
   type LauncherManualTurnStart,
 } from "../../launcher-browser-host";
 import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
+import { TtyApprovalGateway } from "../../hil/approval";
 import type { ProviderAdapter } from "../base";
 import { parseDataUrl } from "../image";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity, priorChatGptAbortedTurnIds } from "./environment";
+import { createHilEmitFilter, createHilExecGate } from "./hil-interceptor";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt";
 import { createChatGptStructuredOutputValidator } from "./output-validation";
@@ -348,6 +350,7 @@ export function createChatGptWebAdapter(
   const zeroRiskManualControl = dependencies.zeroRiskManualControl ?? launcherZeroRiskManualControl;
   const structuredBroker = broker instanceof TurnBroker ? broker : undefined;
   const timeoutMs = provider.chatgptWeb?.turnTimeoutMs;
+  const hilActive = provider.chatgptWeb?.hilEnabled === true;
   const experimentalBiggerContext = provider.chatgptWeb?.experimentalBiggerContext;
   if (experimentalBiggerContext !== undefined && typeof experimentalBiggerContext !== "boolean") {
     throw new Error("ChatGPT Bigger Context preference must be a boolean");
@@ -693,6 +696,12 @@ export function createChatGptWebAdapter(
         ...(captureLunaCheckpoint ? {
           captureLunaCheckpoint: true,
           onLunaCheckpoint: captureCheckpoint,
+        } : {}),
+        ...(hilActive ? {
+          hilExecGate: createHilExecGate({
+            approvalGateway: new TtyApprovalGateway(),
+            workspaceCwd: provider.chatgptWeb?.hilWorkspaceCwd ?? process.cwd(),
+          }),
         } : {}),
       })), browserAbort);
       return {
@@ -1135,11 +1144,24 @@ export function createChatGptWebAdapter(
           session.appendRoundEvents(roundKey, events);
           for (const event of events) emit(event);
         };
+        // When HIL is active for this (browser-only) session, withhold the raw
+        // `[EXEC_REQUEST]...[/EXEC_REQUEST]` protocol block from the Codex-transcript text_delta
+        // stream so it never reaches Codex or the round journal. One filter instance is shared
+        // across every batch in the round (rather than recreated per batch) because it buffers
+        // partial protocol-block text across `text_delta` boundaries; a fresh instance per batch
+        // would lose that buffered state and could leak or duplicate a split protocol block.
+        const hilFilterActive = hilActive && session.runtime.mode === "read-only";
+        let batchSink: (event: AdapterEvent) => void = () => {};
+        const hilRoundFilter = hilFilterActive
+          ? createHilEmitFilter<AdapterEvent>(event => batchSink(event))
+          : undefined;
         const emitRoundBatch = (
           produce: (buffer: (event: AdapterEvent) => void) => void,
         ): void => {
           const events: AdapterEvent[] = [];
-          produce(event => events.push(event));
+          batchSink = event => events.push(event);
+          const buffer = hilRoundFilter ?? batchSink;
+          produce(buffer);
           emitRoundEvents(events);
         };
         const emitRoundEvent = (event: AdapterEvent): void => emitRoundEvents([event]);
