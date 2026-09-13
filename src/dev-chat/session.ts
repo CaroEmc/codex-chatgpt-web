@@ -33,6 +33,7 @@ const stateSchema = z.object({
   turns: z.number().int().nonnegative(),
   compactions: z.number().int().nonnegative(),
   syntheticFills: z.number().int().nonnegative(),
+  hilEnabled: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
   lastUsage: usageSchema.optional(),
@@ -54,6 +55,7 @@ export interface DevChatState {
   turns: number;
   compactions: number;
   syntheticFills: number;
+  hilEnabled: boolean;
   createdAt: string;
   updatedAt: string;
   lastUsage?: DevChatUsage;
@@ -121,6 +123,7 @@ export class DevChatStore {
         turns: 0,
         compactions: 0,
         syntheticFills: 0,
+        hilEnabled: false,
         createdAt: now,
         updatedAt: now,
       },

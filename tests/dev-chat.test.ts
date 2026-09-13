@@ -138,6 +138,111 @@ test("named DEV state and deterministic context filler persist independently", (
   expect(store.load("compaction-lab")).toMatchObject({ input: [], turns: 0, syntheticFills: 0 });
 });
 
+test("hilEnabled defaults to false and persists once set", () => {
+  const root = scratch("cgw-dev-hil-state");
+  const store = new DevChatStore(join(root, "chats"));
+  const opened = store.loadOrCreate("hil-lab", "chatgpt-web/high", root);
+  expect(opened.state.hilEnabled).toBe(false);
+  opened.state.hilEnabled = true;
+  store.save(opened.state);
+  expect(store.load("hil-lab")).toMatchObject({ hilEnabled: true });
+});
+
+test("hilEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT back before the final answer", async () => {
+  const root = scratch("cgw-dev-hil-roundtrip");
+  const config = {
+    ...defaultConfig("browser-only"),
+    purpose: "dev-harness" as const,
+    solAvailable: true,
+    proAvailable: true,
+  };
+  let round = 0;
+  const factory = (): ProviderAdapter => ({
+    name: "dev-hil-test",
+    async runTurn(parsed, _incoming, emit) {
+      round += 1;
+      if (round === 1) {
+        emit({
+          type: "text_delta",
+          phase: "final_answer",
+          text: "[EXEC_REQUEST]\ncommand: printf hello\nreason: greet\n[/EXEC_REQUEST]",
+        });
+      } else {
+        const lastMessage = JSON.stringify(parsed.context).includes("[EXEC_RESULT]");
+        expect(lastMessage).toBe(true);
+        emit({ type: "text_delta", phase: "final_answer", text: "Done: hello" });
+      }
+      emit({
+        type: "done", stopReason: "stop", endTurn: true,
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, estimated: true },
+      });
+    },
+  });
+  const approvals: unknown[] = [];
+  const gateway = { request: async (proposal: unknown) => { approvals.push(proposal); return { action: "run" as const, command: "printf hello" }; } };
+  const driver = new DevChatDriver(
+    config,
+    new DevChatStore(join(root, "chats")),
+    factory,
+    root,
+    undefined,
+    gateway,
+  );
+  const state = driver.open("hil-roundtrip", "chatgpt-web/extra-high").state;
+  driver.setHil(state, true);
+  const result = await driver.send(state, "Please greet me.");
+  expect(result.text).toBe("Done: hello");
+  expect(approvals).toHaveLength(1);
+});
+
+test("a persisted hilEnabled=true chat never parses/executes an EXEC_REQUEST once the driver is running under full mode", async () => {
+  const root = scratch("cgw-dev-hil-full-mode-exec");
+  const config = {
+    ...defaultConfig("full"),
+    purpose: "dev-harness" as const,
+    solAvailable: true,
+    proAvailable: true,
+  };
+  const execRequestText = "[EXEC_REQUEST]\ncommand: printf hello\nreason: greet\n[/EXEC_REQUEST]";
+  const factory = (): ProviderAdapter => ({
+    name: "dev-hil-full-mode-test",
+    async runTurn(_parsed, _incoming, emit) {
+      emit({ type: "text_delta", phase: "final_answer", text: execRequestText });
+      emit({
+        type: "done", stopReason: "stop", endTurn: true,
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, estimated: true },
+      });
+    },
+  });
+  const approvals: unknown[] = [];
+  const gateway = { request: async (proposal: unknown) => { approvals.push(proposal); return { action: "run" as const, command: "printf hello" }; } };
+  const store = new DevChatStore(join(root, "chats"));
+  const driver = new DevChatDriver(config, store, factory, root, undefined, gateway);
+  const state = driver.open("hil-full-exec", "chatgpt-web/extra-high").state;
+  // Bypass setHil (which correctly refuses to arm HIL under full mode) to simulate a chat
+  // whose hilEnabled flag was persisted true while the DEV profile was previously configured
+  // for browser-only mode, then reopened after the profile moved to full mode.
+  state.hilEnabled = true;
+  store.save(state);
+  const result = await driver.send(state, "Please greet me.");
+  expect(result.text).toBe(execRequestText);
+  expect(approvals).toHaveLength(0);
+});
+
+test("setHil rejects enabling HIL under full mode", () => {
+  const root = scratch("cgw-dev-hil-full-mode");
+  const driver = new DevChatDriver(
+    defaultConfig("full"),
+    new DevChatStore(join(root, "chats")),
+    (_provider: CodexProviderConfig): ProviderAdapter => {
+      throw new Error("adapter is not needed for this assertion");
+    },
+    root,
+  );
+  const state = driver.open("hil-full").state;
+  expect(() => driver.setHil(state, true)).toThrow("not available");
+});
+
 test("coherent DEV MCP payloads are bounded, deterministic, and distinct", () => {
   const first = createDevCoherentContextPayload(1, 3_000);
   const repeated = createDevCoherentContextPayload(1, 3_000);
