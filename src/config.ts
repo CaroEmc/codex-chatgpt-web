@@ -67,6 +67,7 @@ export interface AppConfig {
   purpose?: "dev-harness";
   releaseVersion: string;
   mode: RuntimeMode;
+  hilEnabled: boolean;
   subagentProtocol: SubagentProtocol;
   host: "127.0.0.1";
   port: number;
@@ -107,6 +108,27 @@ export function tunnelConfigForInteractionMode(
   // The single tunnel field predates Zero Risk. Released 4.x configurations therefore always
   // belong to Automatic mode; Zero Risk is populated only by an explicit setup or migration.
   return mode === "automatic" ? config.tunnel : undefined;
+}
+
+export function resolveHilActivation(
+  requested: boolean,
+  mode: RuntimeMode,
+  stdinIsTty: boolean,
+): { enabled: boolean; warning?: string } {
+  if (!requested) return { enabled: false };
+  if (mode !== "browser-only") {
+    return {
+      enabled: false,
+      warning: "HIL requires browser-only mode; the daemon is running in full mode. HIL is disabled for this process.",
+    };
+  }
+  if (!stdinIsTty) {
+    return {
+      enabled: false,
+      warning: "HIL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HIL is disabled for this process.",
+    };
+  }
+  return { enabled: true };
 }
 
 export function expandUserPath(value: string): string {
@@ -196,6 +218,7 @@ export function defaultConfig(mode: RuntimeMode = "browser-only"): AppConfig {
     version: 3,
     releaseVersion: VERSION,
     mode,
+    hilEnabled: false,
     subagentProtocol: "compatibility-v1",
     host: "127.0.0.1",
     port: 17841,
