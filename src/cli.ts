@@ -48,7 +48,7 @@ Usage:
   codex-chatgpt-web dev setup <--browser-only|--full> [options]
   codex-chatgpt-web dev chat NAME [--model MODEL] [MESSAGE]
   codex-chatgpt-web dev list
-  codex-chatgpt-web serve
+  codex-chatgpt-web serve [--hil]
   codex-chatgpt-web mcp [--broker-socket PATH]
   codex-chatgpt-web service <status|install|start|restart|stop|cancel-turns>
   codex-chatgpt-web tunnel <status|start|restart|stop|key-import>
@@ -58,6 +58,7 @@ Usage:
 Setup options:
   --browser-only               Account-eligible Web models, full context/images, no local tools or tunnel
   --full                       Account-eligible Web models with tools through the configured connector
+  --hil                        Enable human-in-the-loop local exec (browser-only mode, foreground only)
   --automatic-browser-interaction
                                Send prompts and read ChatGPT state through browser automation (default)
   --zero-risk-browser-interaction
@@ -258,11 +259,29 @@ async function loginCommand(args: string[]): Promise<void> {
   stdout.write("Passkey session captured for Launcher verification.\n");
 }
 
-async function setupCommand(args: string[]): Promise<void> {
-  const preflightOnly = takeFlag(args, "--preflight-only");
+/**
+ * Parses the mutually-exclusive setup-mode flags (`--browser-only`/`--full`) plus the
+ * co-equal `--hil` flag out of `args` (mutating it, same as `takeFlag`/`takeOption`).
+ * Exported so its throw behavior and returned flags can be unit-tested directly,
+ * without exercising the rest of `setupCommand`'s (async, I/O-heavy) flow.
+ */
+export function resolveSetupModeFlags(args: string[]): { browserOnly: boolean; full: boolean; hil: boolean } {
   const browserOnly = takeFlag(args, "--browser-only");
   const full = takeFlag(args, "--full");
   if (browserOnly === full) throw new Error("Choose exactly one setup mode: --browser-only or --full");
+  const hil = takeFlag(args, "--hil");
+  if (hil && full) {
+    throw new Error("--hil requires --browser-only (full mode already has real tool calls)");
+  }
+  return { browserOnly, full, hil };
+}
+
+async function setupCommand(args: string[]): Promise<void> {
+  const preflightOnly = takeFlag(args, "--preflight-only");
+  // `--hil` is validated here (rejecting nonsensical combinations up front) but is not
+  // persisted through setup; the daemon re-derives HIL activation fresh at `serve` startup
+  // (see startServer in src/server.ts), since it depends on the TTY of that later process too.
+  const { full } = resolveSetupModeFlags(args);
   const portRaw = takeOption(args, "--port");
   let acknowledged = takeFlag(args, "--acknowledge-unofficial");
   const options: SetupOptions = {
@@ -576,9 +595,10 @@ async function main(): Promise<void> {
       stdout.write("Playwright can launch the configured Chrome executable.\n");
     }
   } else if (command === "serve") {
+    const hilRequested = takeFlag(args, "--hil");
     assertNoArgs(args);
     const config = loadConfig();
-    const server = startServer(config);
+    const server = startServer(config, { hilRequested });
     stdout.write(`codex-chatgpt-web ${VERSION} listening on http://${config.host}:${server.port}/v1 (${config.mode})\n`);
     await new Promise<void>(() => {});
   } else if (command === "dev") await runDevCommand(args);
