@@ -43,6 +43,7 @@ import {
   type ChatGptWebMultipartStage,
 } from "./prompt";
 import { estimateCompiledChatGptWebInputTokens } from "./input-tokens";
+import type { HilExecGate } from "./hil-interceptor";
 import {
   assertAuthenticatedChatGptPage,
   assertTemporaryChatPage,
@@ -1170,6 +1171,9 @@ export interface BrowserTurn {
     begin(): Promise<number | undefined>;
     commit(revision: number): Promise<boolean>;
   };
+  /** Content-driven alternative to declaring the turn finished: on a match,
+   * submits a follow-up into the same page instead of finalizing. */
+  hilExecGate?: HilExecGate;
   /** Allow one clean pre-submit composer retry for isolated history compaction only. */
   compaction?: boolean;
   /** Require and remove the private Luna checkpoint tail from the visible Markdown stream. */
@@ -4361,7 +4365,7 @@ export class ChatGptBrowserWorker {
           maxMessageChars,
         );
       }
-      const deadline = this.config.turnTimeoutMs === undefined
+      const deadline = this.config.turnTimeoutMs === undefined || turn.hilExecGate !== undefined
         ? undefined
         : Date.now() + this.config.turnTimeoutMs;
       let page = await this.runStage(turn.traceId, "browser_page", browserStageTimeouts.browserPage, async (abortSignal) => {
@@ -4741,9 +4745,9 @@ export class ChatGptBrowserWorker {
       let sawRunning = false;
       let loggedCompletionWait = false;
       let capturedResponse = false;
-      const sentAt = Date.now();
-      const visibleTrace = new ChatGptVisibleTraceTracker();
-      const markdownBuffer = new ChatGptMarkdownBuffer();
+      let sentAt = Date.now();
+      let visibleTrace = new ChatGptVisibleTraceTracker();
+      let markdownBuffer = new ChatGptMarkdownBuffer();
       const checkpointStream = turn.captureLunaCheckpoint
         ? new ChatGptLunaCheckpointStream()
         : undefined;
@@ -4765,7 +4769,7 @@ export class ChatGptBrowserWorker {
           retryable: false,
         });
       };
-      const domHealthTracker = new ChatGptTurnDomHealthTracker();
+      let domHealthTracker = new ChatGptTurnDomHealthTracker();
       const responseDomCache: ChatGptResponseDomCache = {};
       let consecutiveObservationRebinds = 0;
       let internalObservationFaults = 0;
@@ -4940,6 +4944,55 @@ export class ChatGptBrowserWorker {
                 responseDomCache.key = undefined;
                 responseDomCache.snapshot = undefined;
                 await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+                continue;
+              }
+            }
+            if (turn.hilExecGate) {
+              const verdict = await turn.hilExecGate.check(snapshot.visibleText);
+              if (verdict.action === "resume") {
+                submissionBaseline = await this.captureSubmissionBaseline(page);
+                await this.attachPromptWithCompactionRetry(
+                  page,
+                  verdict.followUpText,
+                  mode.localTools,
+                  false,
+                  submissionBaseline,
+                  checkpoint => diagnostics.capture(page, checkpoint),
+                  turn.abortSignal,
+                  false,
+                  connectorAttemptBudget,
+                  reuseConversation,
+                  mode.thinkEnabled,
+                );
+                await this.sendAttachedPrompt(
+                  page,
+                  submissionBaseline,
+                  checkpoint => diagnostics.capture(page, checkpoint),
+                  turn.abortSignal,
+                  turn.externalProgress,
+                  turn,
+                  completionTracker,
+                  undefined,
+                );
+                responseTurn = await this.waitForNewAssistantTurn(
+                  page,
+                  submissionBaseline,
+                  deadline,
+                  turn.abortSignal,
+                  turn.externalProgress,
+                  CHATGPT_RESPONSE_DOM_GRACE_MS,
+                  completionTracker,
+                  undefined,
+                );
+                visibleTrace = new ChatGptVisibleTraceTracker();
+                markdownBuffer = new ChatGptMarkdownBuffer();
+                domHealthTracker = new ChatGptTurnDomHealthTracker();
+                completionFenceRevision = undefined;
+                loggedCompletionWait = false;
+                capturedResponse = false;
+                sentAt = Date.now();
+                responseDomCache.key = undefined;
+                responseDomCache.snapshot = undefined;
                 continue;
               }
             }
