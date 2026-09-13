@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createInterface } from "node:readline/promises";
 import { PassThrough } from "node:stream";
-import { TtyApprovalGateway } from "../src/dev-chat/hil-approval";
+import { TtyApprovalGateway } from "../src/hil/approval";
 
 function fakeTty(isTTY: boolean): { input: PassThrough & { isTTY?: boolean }; output: PassThrough; written: () => string } {
   const input = new PassThrough() as PassThrough & { isTTY?: boolean };

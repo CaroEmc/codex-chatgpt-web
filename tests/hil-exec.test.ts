@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/dev-chat/hil-approval";
-import { EXEC_REJECTED_TEXT } from "../src/dev-chat/hil-protocol";
-import { runApprovedCommand } from "../src/dev-chat/hil-exec";
+import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hil/approval";
+import { EXEC_REJECTED_TEXT } from "../src/hil/protocol";
+import { runApprovedCommand } from "../src/hil/exec";
 
 class FixedGateway implements ApprovalGateway {
   seen: ExecProposal[] = [];
