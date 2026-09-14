@@ -93,13 +93,13 @@ function browserOnlyProvider(overrides: Partial<NonNullable<CodexProviderConfig[
 
 // --- Finding 2: HITL must refuse the launcher browser host instead of silently going inert -----
 
-test("createChatGptWebAdapter refuses HITL when the browser host is the launcher", () => {
+test("createChatGptWebAdapter no longer refuses HITL when the browser host is the launcher", () => {
   const provider = browserOnlyProvider({
     hitlEnabled: true,
     browserHost: "launcher",
     browserHostDescriptorPath: join(tempRoot, "host.json"),
   });
-  expect(() => createChatGptWebAdapter(provider)).toThrow(/HITL requires the managed-chrome browser host/);
+  expect(() => createChatGptWebAdapter(provider)).not.toThrow();
 });
 
 test("the launcher helper client refuses a BrowserTurn carrying a hitlExecGate", async () => {

@@ -368,16 +368,6 @@ export function createChatGptWebAdapter(
     && provider.chatgptWeb.browserHostDescriptorPath
       ? resolve(expandUserPath(provider.chatgptWeb.browserHostDescriptorPath))
       : undefined;
-  if (hitlActive && provider.chatgptWeb?.browserHost === "launcher") {
-    // The launcher browser host runs every turn inside a helper process behind an IPC frame whose
-    // `turn` payload is an explicit field whitelist; a live `hitlExecGate` object cannot cross it.
-    // Refusing here (rather than silently dropping the gate in launcher-helper-client) keeps the
-    // daemon from running turns whose `[EXEC_REQUEST]` block is filtered out of Codex's transcript
-    // while the command is never actually proposed or run.
-    throw new Error(
-      "ChatGPT HITL requires the managed-chrome browser host; the launcher browser host cannot carry the HITL exec gate",
-    );
-  }
   // One gateway, one queue, for every concurrent turn this adapter runs: the daemon has a single
   // stdin, and two readline interfaces on it corrupt each other (see src/hitl/approval.ts).
   const hitlApprovals = hitlActive
