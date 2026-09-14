@@ -30,6 +30,7 @@ type HelperMessage =
   | { type: "event"; id: string; event: "multipart_stage_acknowledged"; stageIndex: number }
   | { type: "event"; id: string; event: "completion_fence_begin"; requestId: number }
   | { type: "event"; id: string; event: "completion_fence_commit"; requestId: number; revision: number }
+  | { type: "event"; id: string; event: "hitl_exec_request"; requestId: number; text: string }
   | { type: "event"; id: string; event: "prepared_selected"; reused: boolean }
   | { type: "event"; id: string; event: "luna_checkpoint"; checkpoint: ChatGptLunaCheckpoint; answerHash: string }
   | { type: "result"; id: string; text: string }
@@ -93,6 +94,15 @@ function parseHelperMessage(line: string): HelperMessage {
         requestId: message.requestId as number,
         revision: message.revision as number,
       };
+    }
+    if (event === "hitl_exec_request") {
+      if (!Number.isSafeInteger(message.requestId) || (message.requestId as number) <= 0) {
+        throw new Error("Launcher browser helper HITL exec request id is invalid");
+      }
+      if (typeof message.text !== "string") {
+        throw new Error("Launcher browser helper HITL exec request text is invalid");
+      }
+      return { type: "event", id: message.id, event, requestId: message.requestId as number, text: message.text };
     }
     if (event === "luna_checkpoint") {
       if (typeof message.answerHash !== "string" || !/^[a-f0-9]{64}$/.test(message.answerHash)) {
@@ -210,17 +220,16 @@ export class LauncherBrowserHelperClient {
 
   async run(turn: BrowserTurn): Promise<string> {
     if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
-    if (turn.hitlExecGate) {
-      // The run frame below is an explicit field whitelist, and `hitlExecGate` is a live object with
-      // a method: it cannot cross this IPC boundary at all, and no helper feature can make it. This
-      // is checked before the helper is even started, because a silently dropped gate would finish
-      // the turn with the `[EXEC_REQUEST]` block filtered out of Codex's transcript (the parent
-      // process still runs that filter) and the command never proposed or run.
+    await this.ensureChild();
+    if (turn.hitlExecGate && !this.helperFeatures.has("hitl-exec-gate")) {
+      // The helper connected but never advertised hitl-exec-gate support: an older launcher build.
+      // Refusing here (rather than silently dropping the gate) keeps the daemon from running a turn
+      // whose [EXEC_REQUEST] block would be filtered out of Codex's transcript while the command is
+      // never actually proposed or run.
       throw new Error(
-        "Launcher browser host does not support human-in-the-loop local exec; HITL requires the managed-chrome browser host",
+        "Launcher browser helper does not support human-in-the-loop local exec; update or restart the launcher",
       );
     }
-    await this.ensureChild();
     if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     if (turn.onMultipartStageAcknowledged && !this.helperFeatures.has("multipart-stage-ack")) {
       throw new Error(
@@ -301,6 +310,7 @@ export class LauncherBrowserHelperClient {
             ...(turn.compaction ? { compaction: true } : {}),
             ...(turn.captureLunaCheckpoint ? { captureLunaCheckpoint: true } : {}),
             ...(turn.externalProgress ? { externalProgress: true } : {}),
+            ...(turn.hitlExecGate ? { hitl: true } : {}),
           },
         })
           // Only mirror once the run frame is on the wire, so the helper never sees progress for a
@@ -481,6 +491,30 @@ export class LauncherBrowserHelperClient {
             id: message.id,
             requestId: message.requestId,
             committed,
+          });
+        }).catch(error => this.abortWithLocalFailure(
+          message.id,
+          error instanceof Error ? error : new Error(String(error)),
+          pending,
+        ));
+      }
+      else if (message.event === "hitl_exec_request") {
+        const gate = pending.turn.hitlExecGate;
+        if (!gate) {
+          this.abortWithLocalFailure(
+            message.id,
+            new Error("Launcher browser helper requested HITL exec approval for a turn without a gate"),
+            pending,
+          );
+          return;
+        }
+        void gate.check(message.text, pending.turn.abortSignal).then(result => {
+          if (this.pending.get(message.id) !== pending || pending.localFailure || pending.turn.abortSignal?.aborted) return;
+          return this.send({
+            type: "hitl_exec_result_ack",
+            id: message.id,
+            requestId: message.requestId,
+            ...result,
           });
         }).catch(error => this.abortWithLocalFailure(
           message.id,

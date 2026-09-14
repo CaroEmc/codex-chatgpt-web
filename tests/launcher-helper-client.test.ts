@@ -400,3 +400,89 @@ test("structured helper errors preserve the ChatGPT adapter failure contract", a
     retryable: true,
   });
 });
+
+test("HITL exec gate round-trips finalize and resume decisions through the real helper process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-launcher-helper-hitl-"));
+  roots.push(root);
+  const helper = join(root, "helper.ts");
+  writeFileSync(helper, `
+    import { ChatGptBrowserWorker } from ${JSON.stringify(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url).href)};
+    // Substitute only the browser. Both sides of the production IPC protocol run unchanged.
+    ChatGptBrowserWorker.prototype.run = async turn => {
+      await turn.onPreparedSelected(false);
+      await turn.prepare();
+      await turn.onSendActivated();
+      turn.onSubmitted();
+      // First round settles on an [EXEC_REQUEST] block; the gate is expected to resume it.
+      const first = await turn.hitlExecGate.check("[EXEC_REQUEST]\\ncommand: echo hi\\ncwd: .\\nreason: test\\n[/EXEC_REQUEST]");
+      if (first.action !== "resume") throw new Error("expected the gate to resume the first round");
+      turn.onTextDelta(first.followUpText);
+      // Second round settles on ordinary text; the gate is expected to finalize it.
+      const second = await turn.hitlExecGate.check("all done");
+      if (second.action !== "finalize") throw new Error("expected the gate to finalize the second round");
+      turn.onTextDelta("all done");
+      return "all done";
+    };
+    await import(${JSON.stringify(new URL("../src/adapters/chatgpt-web/browser-helper-main.ts", import.meta.url).href)});
+  `, { mode: 0o700 });
+  const descriptorHelper = join(root, "descriptor-helper.cjs");
+  writeFileSync(descriptorHelper, "process.exit(99);\n", { mode: 0o700 });
+  const descriptorPath = join(root, "launcher.json");
+  writeFileSync(descriptorPath, `${JSON.stringify({
+    version: 3,
+    kind: LAUNCHER_BROWSER_HOST_KIND,
+    profile: "production",
+    pid: process.pid,
+    endpoint: "http://127.0.0.1:39003",
+    control: {
+      endpoint: "http://127.0.0.1:39004",
+      token: "launcher-control-token-0123456789abcdefghijklmnop",
+    },
+    helper: { executable: process.execPath, script: descriptorHelper },
+    partition: "persist:codex-web-gpt-chatgpt",
+    idleUrl: LAUNCHER_BROWSER_IDLE_URL,
+    surfaceId: "launcher_surface_id_0123456789AB",
+    surfaceTargets: { ["launcher_surface_id_0123456789AB"]: "native-owned-target" },
+    createdAt: new Date().toISOString(),
+  })}\n`, { mode: 0o600 });
+  const config: ResolvedBrowserConfig = {
+    appName: "Codex Native2",
+    browserHost: "launcher",
+    browserHostDescriptorPath: descriptorPath,
+    browserHelperScriptPath: helper,
+    storageStatePath: join(root, "unused-state.json"),
+    chromeExecutablePath: join(root, "unused-chrome"),
+    turnTimeoutMs: 60_000,
+    headed: true,
+    autoApproveToolCalls: false,
+  };
+  const checkCalls: string[] = [];
+  const client = new LauncherBrowserHelperClient(config);
+  try {
+    const result = await client.run({
+      traceId: "hitl_roundtrip_123456",
+      modelId: "gpt-5.6-sol",
+      reasoning: "high",
+      capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: false },
+      prepare: async () => ({ text: "inspect", images: [], release: () => {} }),
+      onSendActivated: () => {},
+      onSubmitted: () => {},
+      onReasoningSummary: () => {},
+      onTextDelta: () => {},
+      hitlExecGate: {
+        check: async (finalText: string) => {
+          checkCalls.push(finalText);
+          if (finalText.includes("[EXEC_REQUEST]")) return { action: "resume", followUpText: "[EXEC_RESULT]\nexit_code: 0\noutput:\nhi\n[/EXEC_RESULT]" };
+          return { action: "finalize" };
+        },
+      },
+    } as unknown as Parameters<typeof client.run>[0]);
+    expect(result).toBe("all done");
+    expect(checkCalls).toEqual([
+      "[EXEC_REQUEST]\ncommand: echo hi\ncwd: .\nreason: test\n[/EXEC_REQUEST]",
+      "all done",
+    ]);
+  } finally {
+    await client.close();
+  }
+});

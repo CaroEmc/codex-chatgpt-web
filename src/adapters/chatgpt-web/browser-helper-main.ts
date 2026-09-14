@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { stdin, stderr, stdout } from "node:process";
 import type { CodexProviderConfig } from "../../types";
 import { ChatGptBrowserWorker, closeChatGptBrowserWorkers, type BrowserTurn } from "./browser-worker";
+import type { HitlExecGate } from "./hitl-interceptor";
 import { ChatGptCompactionHandoffAccepted, ChatGptWebAdapterError } from "./adapter-error";
 import type { ChatGptWebCapabilities } from "./model";
 import { createProcessLineWriter } from "./process-line-writer";
@@ -33,6 +34,7 @@ interface RunMessage {
     compaction?: boolean;
     captureLunaCheckpoint?: boolean;
     externalProgress?: boolean;
+    hitl?: boolean;
   };
 }
 
@@ -65,6 +67,8 @@ type InputMessage = RunMessage
   | { type: "send_activation_ack"; id: string }
   | { type: "completion_fence_begin_ack"; id: string; requestId: number; revision: number | null }
   | { type: "completion_fence_commit_ack"; id: string; requestId: number; committed: boolean }
+  | { type: "hitl_exec_result_ack"; id: string; requestId: number; action: "finalize" }
+  | { type: "hitl_exec_result_ack"; id: string; requestId: number; action: "resume"; followUpText: string }
   | { type: "progress"; id: string; snapshot: ChatGptExternalTurnProgressSnapshot }
   | { type: "abort"; id: string; reason?: "compaction_handoff_accepted" }
   | { type: "shutdown" };
@@ -104,6 +108,12 @@ const completionFenceCommitWaiters = new Map<string, {
   resolve: (committed: boolean) => void;
   reject: (error: Error) => void;
 }>();
+const hitlExecWaiters = new Map<string, {
+  requestId: number;
+  resolve: (result: { action: "finalize" } | { action: "resume"; followUpText: string }) => void;
+  reject: (error: Error) => void;
+}>();
+let hitlExecRequestId = 0;
 let completionFenceRequestId = 0;
 let shuttingDown = false;
 let shutdownPromise: Promise<void> | undefined;
@@ -132,6 +142,10 @@ function requestShutdown(): Promise<void> {
     waiter.reject(new DOMException("Browser helper is shutting down", "AbortError"));
   }
   completionFenceCommitWaiters.clear();
+  for (const waiter of hitlExecWaiters.values()) {
+    waiter.reject(new DOMException("Browser helper is shutting down", "AbortError"));
+  }
+  hitlExecWaiters.clear();
   input.close();
   void closeChatGptBrowserWorkers().then(
     () => {
@@ -176,6 +190,9 @@ async function run(message: RunMessage): Promise<void> {
   }
   if (message.turn.externalProgress !== undefined && typeof message.turn.externalProgress !== "boolean") {
     throw new Error("Browser helper external progress flag is invalid");
+  }
+  if (message.turn.hitl !== undefined && typeof message.turn.hitl !== "boolean") {
+    throw new Error("Browser helper HITL flag is invalid");
   }
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
@@ -249,6 +266,23 @@ async function run(message: RunMessage): Promise<void> {
           }
         }),
       },
+    } : {}),
+    ...(message.turn.hitl ? {
+      hitlExecGate: {
+        check: (finalText: string) => new Promise<{ action: "finalize" } | { action: "resume"; followUpText: string }>((resolve, reject) => {
+          if (hitlExecWaiters.has(message.id)) {
+            reject(new Error("Browser helper HITL exec gate already awaits a result"));
+            return;
+          }
+          hitlExecRequestId += 1;
+          const requestId = hitlExecRequestId;
+          hitlExecWaiters.set(message.id, { requestId, resolve, reject });
+          if (!writeProtocol({ type: "event", id: message.id, event: "hitl_exec_request", requestId, text: finalText })) {
+            hitlExecWaiters.delete(message.id);
+            reject(new Error("Browser helper could not request HITL exec approval"));
+          }
+        }),
+      } satisfies HitlExecGate,
     } : {}),
     onHeartbeat: () => writeProtocol({ type: "event", id: message.id, event: "heartbeat" }),
     onPreparedSelected: reused => {
@@ -325,6 +359,9 @@ async function run(message: RunMessage): Promise<void> {
     const commitWaiter = completionFenceCommitWaiters.get(message.id);
     completionFenceCommitWaiters.delete(message.id);
     commitWaiter?.reject(new DOMException("Browser helper turn ended before completion-fence commit", "AbortError"));
+    const hitlWaiter = hitlExecWaiters.get(message.id);
+    hitlExecWaiters.delete(message.id);
+    hitlWaiter?.reject(new DOMException("Browser helper turn ended before HITL exec approval", "AbortError"));
     abortControllers.delete(message.id);
     turnProgress.delete(message.id);
   }
@@ -446,6 +483,26 @@ input.on("line", line => {
     if (!waiter || waiter.requestId !== message.requestId) return;
     completionFenceCommitWaiters.delete(message.id);
     waiter.resolve(message.committed);
+  } else if (message.type === "hitl_exec_result_ack") {
+    if (!Number.isSafeInteger(message.requestId) || message.requestId <= 0) {
+      writeProtocol({ type: "error", id: message.id, message: "Browser helper HITL exec request id is invalid" });
+      abortControllers.get(message.id)?.abort();
+      return;
+    }
+    if ((message.action as string) !== "finalize" && (message.action as string) !== "resume") {
+      writeProtocol({ type: "error", id: message.id, message: "Browser helper HITL exec action is invalid" });
+      abortControllers.get(message.id)?.abort();
+      return;
+    }
+    if (message.action === "resume" && typeof message.followUpText !== "string") {
+      writeProtocol({ type: "error", id: message.id, message: "Browser helper HITL exec follow-up text is invalid" });
+      abortControllers.get(message.id)?.abort();
+      return;
+    }
+    const waiter = hitlExecWaiters.get(message.id);
+    if (!waiter || waiter.requestId !== message.requestId) return;
+    hitlExecWaiters.delete(message.id);
+    waiter.resolve(message.action === "finalize" ? { action: "finalize" } : { action: "resume", followUpText: message.followUpText });
   } else if (message.type === "progress") {
     // Progress is meaningful only for a turn this helper is currently running. Ignore every other
     // id so the mirror map remains owned by active turn lifecycles.
@@ -476,6 +533,9 @@ input.on("line", line => {
     const commitWaiter = completionFenceCommitWaiters.get(message.id);
     completionFenceCommitWaiters.delete(message.id);
     commitWaiter?.reject(new DOMException("Browser helper turn aborted before completion-fence commit", "AbortError"));
+    const hitlWaiter = hitlExecWaiters.get(message.id);
+    hitlExecWaiters.delete(message.id);
+    hitlWaiter?.reject(new DOMException("Browser helper turn aborted before HITL exec approval", "AbortError"));
   }
   else if (message.type === "shutdown") {
     void requestShutdown();
@@ -517,4 +577,4 @@ process.once("SIGTERM", () => {
 });
 
 // Advertise the optional frames this helper understands so the daemon can negotiate them explicitly.
-writeProtocol({ type: "ready", features: ["progress", "tool-boundary-ack", "completion-fence", "multipart-stage-ack"] });
+writeProtocol({ type: "ready", features: ["progress", "tool-boundary-ack", "completion-fence", "multipart-stage-ack", "hitl-exec-gate"] });

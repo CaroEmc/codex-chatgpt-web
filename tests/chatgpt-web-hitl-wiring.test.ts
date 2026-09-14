@@ -1,11 +1,12 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatGptWebAdapterError } from "../src/adapters/chatgpt-web/adapter-error";
 import { ChatGptBrowserWorker, type BrowserTurn } from "../src/adapters/chatgpt-web/browser-worker";
 import { createChatGptWebAdapter } from "../src/adapters/chatgpt-web/index";
 import { LauncherBrowserHelperClient } from "../src/adapters/chatgpt-web/launcher-helper-client";
+import { LAUNCHER_BROWSER_HOST_KIND, LAUNCHER_BROWSER_IDLE_URL } from "../src/launcher-browser-host";
 import { CHATGPT_WEB_LUNA_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS } from "../src/hitl/protocol";
 import type { ApprovalGateway, ExecProposal } from "../src/hitl/approval";
@@ -102,25 +103,48 @@ test("createChatGptWebAdapter no longer refuses HITL when the browser host is th
   expect(() => createChatGptWebAdapter(provider)).not.toThrow();
 });
 
-test("the launcher helper client refuses a BrowserTurn carrying a hitlExecGate", async () => {
-  // The launcher run frame is an explicit field whitelist that cannot carry a live gate object, so
-  // dispatching such a turn must fail loudly rather than drop the gate. Checked before the helper
-  // process is started, so this needs no fake child.
+test("the launcher helper client refuses a BrowserTurn carrying a hitlExecGate when the helper hasn't advertised support", async () => {
+  // A connected helper that hasn't advertised "hitl-exec-gate" cannot carry a live gate object
+  // across the IPC boundary, so dispatching such a turn must fail loudly rather than drop the gate.
+  // The feature is only knowable after a real connection (ensureChild), so this spawns a minimal
+  // real helper stub that advertises no features at all, rather than reusing a build of the actual
+  // browser-helper-main.ts (which now always advertises hitl-exec-gate after this same commit).
+  const helper = join(tempRoot, "featureless-helper.cjs");
+  writeFileSync(helper, "process.stdout.write(JSON.stringify({ type: \"ready\", features: [] }) + \"\\n\");\n", { mode: 0o700 });
+  const descriptorPath = join(tempRoot, "featureless-host.json");
+  writeFileSync(descriptorPath, `${JSON.stringify({
+    version: 3,
+    kind: LAUNCHER_BROWSER_HOST_KIND,
+    profile: "production",
+    pid: process.pid,
+    endpoint: "http://127.0.0.1:0",
+    control: { endpoint: "http://127.0.0.1:0", token: "launcher-control-token-0123456789abcdefghijklmnop" },
+    helper: { executable: process.execPath, script: helper },
+    partition: "persist:codex-web-gpt-chatgpt",
+    idleUrl: LAUNCHER_BROWSER_IDLE_URL,
+    surfaceId: "launcher_surface_id_0123456789AB",
+    surfaceTargets: { launcher_surface_id_0123456789AB: "native-owned-target" },
+    createdAt: new Date().toISOString(),
+  })}\n`, { mode: 0o600 });
   const client = new LauncherBrowserHelperClient({
     appName: "test",
     browserHost: "launcher",
-    browserHostDescriptorPath: join(tempRoot, "host.json"),
+    browserHostDescriptorPath: descriptorPath,
   } as unknown as ConstructorParameters<typeof LauncherBrowserHelperClient>[0]);
-  await expect(client.run({
-    traceId: "trace_launcher_hitl",
-    modelId: CHATGPT_WEB_MODEL_ID,
-    capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: false },
-    prepare: async () => ({ text: "prompt", images: [], release: () => {} }),
-    onReasoningSummary: () => {},
-    onCommentary: () => {},
-    onTextDelta: () => {},
-    hitlExecGate: { check: async () => ({ action: "finalize" as const }) },
-  } as unknown as BrowserTurn)).rejects.toThrow(/does not support human-in-the-loop local exec/);
+  try {
+    await expect(client.run({
+      traceId: "trace_launcher_hitl",
+      modelId: CHATGPT_WEB_MODEL_ID,
+      capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: false },
+      prepare: async () => ({ text: "prompt", images: [], release: () => {} }),
+      onReasoningSummary: () => {},
+      onCommentary: () => {},
+      onTextDelta: () => {},
+      hitlExecGate: { check: async () => ({ action: "finalize" as const }) },
+    } as unknown as BrowserTurn)).rejects.toThrow(/does not support human-in-the-loop local exec/);
+  } finally {
+    await client.close();
+  }
 });
 
 test("browser-only runTurn wires hitlExecGate onto the BrowserTurn when hitlEnabled", async () => {
