@@ -1541,6 +1541,73 @@ test("launcher preserves stale ownership evidence when an old active runtime can
   }
 });
 
+test("launcher reports externalHealthy when a healthy same-version daemon already owns the port", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-external-healthy-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  fs.writeFileSync(path.join(root, "config.json"), `${JSON.stringify(launcherConfig(descriptorPath, {
+    releaseVersion: "0.2.0",
+    controlToken: "external-healthy-control-token-0123456789abcdef",
+  }))}\n`);
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  supervisor.proxyHealth = async () => true;
+  supervisor.stopStaleOwnedRuntime = async () => false;
+
+  try {
+    const result = await supervisor.startConfigured();
+    assert.equal(result.status, "external");
+    assert.equal(result.detail, "An external runtime already owns the configured port");
+    assert.equal(result.externalHealthy, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("launcher reports externalHealthy false when the port owner is not a matching daemon", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-external-unhealthy-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  const statePath = path.join(root, "runtime", "launcher-supervisor.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  fs.writeFileSync(path.join(root, "config.json"), `${JSON.stringify(launcherConfig(descriptorPath, {
+    releaseVersion: "0.2.0",
+    controlToken: "external-unhealthy-control-token-0123456789abcdef",
+  }))}\n`);
+  const staleState = {
+    version: 1,
+    ownerPid: process.pid,
+    daemonPid: 999_999_998,
+    tunnelPid: null,
+    status: "ready",
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(statePath, `${JSON.stringify(staleState)}\n`);
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  supervisor.proxyHealth = async () => false;
+  supervisor.stopStaleOwnedRuntime = async () => false;
+
+  try {
+    const result = await supervisor.startConfigured();
+    assert.equal(result.status, "external");
+    assert.equal(result.externalHealthy, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("launcher recovers a stale tunnel even when no stale Responses proxy is reachable", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-stale-tunnel-only-"));
   const descriptorPath = path.join(root, "runtime", "launcher-browser.json");

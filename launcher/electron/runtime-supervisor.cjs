@@ -1234,13 +1234,13 @@ class RuntimeSupervisor {
               : "Existing launcher runtime ownership could not be safely recovered";
             this.writeExternalState(detail);
             this.logger.warn("runtime.external_owner_detected", { port: config.port, detail });
-            return { status: "external", detail };
+            return { status: "external", detail, externalHealthy: healthyRuntime };
           }
         } catch (error) {
           const detail = errorMessage(error);
           this.writeExternalState(detail);
           this.logger.warn("runtime.external_owner_detected", { port: config.port, detail });
-          return { status: "external", detail };
+          return { status: "external", detail, externalHealthy: healthyRuntime };
         }
       }
     }

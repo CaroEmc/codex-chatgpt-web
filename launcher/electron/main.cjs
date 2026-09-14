@@ -1210,6 +1210,30 @@ async function start() {
       }
       return;
     }
+    if (runtime.status === "external" && runtime.externalHealthy) {
+      try {
+        const route = await runtimeHost.connectBridgeRoute();
+        if (route.changed) {
+          const current = stateStore.read();
+          const patch = { codexCatalogVerified: false, codexRestartRequired: true };
+          if (Object.entries(patch).some(([key, value]) => current[key] !== value)) {
+            const state = stateStore.update(patch);
+            send("launcher:state-changed", state);
+          }
+          startCatalogVerificationMonitor({ logger, stateStore });
+        }
+        logger.info("runtime.external_healthy_route_connected", { changed: route.changed === true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error("runtime.external_healthy_route_connect_failed", { message });
+        publishOperation({
+          name: "runtime-start",
+          status: "failed",
+          message: `An external runtime already owns the configured port, but connecting the Codex route failed: ${message}`,
+        });
+      }
+      return;
+    }
     const routeRecovery = await restoreCodexRouteAfterRuntimeFailure({ logger, stateStore });
     const state = stateStore.update({ coreSetupComplete: false, codexCatalogVerified: false });
     send("launcher:state-changed", state);
