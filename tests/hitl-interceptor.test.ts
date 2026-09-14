@@ -2,23 +2,23 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHilExecGate, createHilEmitFilter, HilApprovalQueue } from "../src/adapters/chatgpt-web/hil-interceptor";
-import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hil/approval";
+import { createHitlExecGate, createHitlEmitFilter, HitlApprovalQueue } from "../src/adapters/chatgpt-web/hitl-interceptor";
+import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hitl/approval";
 
 function fakeGateway(decision: ApprovalDecision): ApprovalGateway {
   return { request: async () => decision };
 }
 
-test("createHilExecGate finalizes when there is no EXEC_REQUEST block", async () => {
-  const gate = createHilExecGate({
+test("createHitlExecGate finalizes when there is no EXEC_REQUEST block", async () => {
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "reject" }),
     workspaceCwd: "/workspace",
   });
   expect(await gate.check("Just a normal final answer.")).toEqual({ action: "finalize" });
 });
 
-test("createHilExecGate resumes with the formatted EXEC_RESULT after an approved run", async () => {
-  const gate = createHilExecGate({
+test("createHitlExecGate resumes with the formatted EXEC_RESULT after an approved run", async () => {
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "run", command: "echo hi" }),
     workspaceCwd: "/workspace",
     runCommand: async (_gateway, request, workspaceCwd) => {
@@ -34,8 +34,8 @@ test("createHilExecGate resumes with the formatted EXEC_RESULT after an approved
   });
 });
 
-test("createHilExecGate resumes with the rejection text when the gateway rejects", async () => {
-  const gate = createHilExecGate({
+test("createHitlExecGate resumes with the rejection text when the gateway rejects", async () => {
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "reject" }),
     workspaceCwd: "/workspace",
   });
@@ -46,9 +46,9 @@ test("createHilExecGate resumes with the rejection text when the gateway rejects
   });
 });
 
-test("createHilEmitFilter passes ordinary text straight through", () => {
+test("createHitlEmitFilter passes ordinary text straight through", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "hello " });
   filtered({ type: "text_delta", text: "world" });
   expect(seen).toEqual([
@@ -57,26 +57,26 @@ test("createHilEmitFilter passes ordinary text straight through", () => {
   ]);
 });
 
-test("createHilEmitFilter withholds a completed EXEC_REQUEST block entirely", () => {
+test("createHitlEmitFilter withholds a completed EXEC_REQUEST block entirely", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "[EXEC_REQUEST]\n" });
   filtered({ type: "text_delta", text: "command: ls\n[/EXEC_REQUEST]" });
   filtered({ type: "done" });
   expect(seen).toEqual([{ type: "done" }]);
 });
 
-test("createHilEmitFilter flushes verbatim when a [-prefixed delta turns out not to match", () => {
+test("createHitlEmitFilter flushes verbatim when a [-prefixed delta turns out not to match", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "[not a protocol block]" });
   expect(seen).toEqual([{ type: "text_delta", text: "[not a protocol block]" }]);
 });
 
-test("createHilEmitFilter handles bracketed text split across calls without duplication", () => {
+test("createHitlEmitFilter handles bracketed text split across calls without duplication", () => {
   type TestEvent = { type: string; text?: string; phase?: string };
   const seen: TestEvent[] = [];
-  const filtered = createHilEmitFilter<TestEvent>(event => seen.push(event));
+  const filtered = createHitlEmitFilter<TestEvent>(event => seen.push(event));
   filtered({ type: "text_delta", text: "see [" });
   filtered({ type: "text_delta", text: "1] for details" });
   // Reconstruct emitted text
@@ -88,7 +88,7 @@ test("createHilEmitFilter handles bracketed text split across calls without dupl
   ]);
 });
 
-test("createHilEmitFilter preserves each flushed event's phase across a multi-delta bracket buffer", () => {
+test("createHitlEmitFilter preserves each flushed event's phase across a multi-delta bracket buffer", () => {
   // Reproduces a lone "[" landing on a delta boundary (e.g. inside a markdown link like
   // "See [docs](url)"), which the filter holds back pending more text since "[" is a strict
   // prefix of "[EXEC_REQUEST". Once later text proves it was never a protocol block, the filter
@@ -97,7 +97,7 @@ test("createHilEmitFilter preserves each flushed event's phase across a multi-de
   // items on a phase change, so a dropped phase fragments the transcript).
   type TestEvent = { type: string; text?: string; phase?: string };
   const seen: TestEvent[] = [];
-  const filtered = createHilEmitFilter<TestEvent>(event => seen.push(event));
+  const filtered = createHitlEmitFilter<TestEvent>(event => seen.push(event));
   filtered({ type: "text_delta", text: "See ", phase: "final_answer" });
   filtered({ type: "text_delta", text: "[", phase: "final_answer" });
   filtered({ type: "text_delta", text: "docs](url) for details", phase: "final_answer" });
@@ -114,9 +114,9 @@ test("createHilEmitFilter preserves each flushed event's phase across a multi-de
   ]);
 });
 
-test("createHilEmitFilter handles EXEC_REQUEST split mid-token across calls", () => {
+test("createHitlEmitFilter handles EXEC_REQUEST split mid-token across calls", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "[EXEC_REQ" });
   filtered({ type: "text_delta", text: "UEST]\ncommand: ls\n[/EXEC_REQUEST]" });
   filtered({ type: "done" });
@@ -126,11 +126,11 @@ test("createHilEmitFilter handles EXEC_REQUEST split mid-token across calls", ()
 
 // --- Finding 5: an approved command must never spawn for a cancelled turn -------------------
 
-test("createHilExecGate finalizes without prompting when the turn is already aborted", async () => {
+test("createHitlExecGate finalizes without prompting when the turn is already aborted", async () => {
   let prompted = false;
   const controller = new AbortController();
   controller.abort();
-  const gate = createHilExecGate({
+  const gate = createHitlExecGate({
     approvalGateway: { request: async () => { prompted = true; return { action: "run", command: "echo hi" }; } },
     workspaceCwd: "/workspace",
     runCommand: async () => { throw new Error("runCommand must not be reached for an aborted turn"); },
@@ -140,13 +140,13 @@ test("createHilExecGate finalizes without prompting when the turn is already abo
   expect(prompted).toBe(false);
 });
 
-test("createHilExecGate never spawns the command when the turn is cancelled while the approval prompt is open", async () => {
+test("createHitlExecGate never spawns the command when the turn is cancelled while the approval prompt is open", async () => {
   // Uses the REAL runApprovedCommand (no runCommand injection), so this asserts on an actual child
   // process: the approved command would create this marker file if it ever reached spawn().
-  const workspace = mkdtempSync(join(tmpdir(), "hil-abort-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-abort-"));
   const marker = join(workspace, "spawned.txt");
   const controller = new AbortController();
-  const gate = createHilExecGate({
+  const gate = createHitlExecGate({
     approvalGateway: {
       // The operator takes their time; Codex cancels the turn while the prompt is still open.
       request: async () => {
@@ -162,9 +162,9 @@ test("createHilExecGate never spawns the command when the turn is cancelled whil
   rmSync(workspace, { recursive: true, force: true });
 });
 
-test("createHilExecGate still resumes normally when the supplied signal never aborts", async () => {
+test("createHitlExecGate still resumes normally when the supplied signal never aborts", async () => {
   const controller = new AbortController();
-  const gate = createHilExecGate({
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "run", command: "echo hi" }),
     workspaceCwd: "/workspace",
     runCommand: async () => "[EXEC_RESULT]\nexit_code: 0\noutput:\nhi\n[/EXEC_RESULT]",
@@ -177,7 +177,7 @@ test("createHilExecGate still resumes normally when the supplied signal never ab
 
 // --- Finding 3: concurrent turns must not open two readline interfaces on one stdin ----------
 
-test("HilApprovalQueue serializes concurrent approvals and stamps each proposal with its turn id", async () => {
+test("HitlApprovalQueue serializes concurrent approvals and stamps each proposal with its turn id", async () => {
   let live = 0;
   let maxLive = 0;
   const seen: ExecProposal[] = [];
@@ -191,7 +191,7 @@ test("HilApprovalQueue serializes concurrent approvals and stamps each proposal 
       return { action: "run", command: proposal.command };
     },
   };
-  const queue = new HilApprovalQueue(gateway);
+  const queue = new HitlApprovalQueue(gateway);
   const decisions = await Promise.all([
     queue.forTurn("trace-a").request({ command: "a", cwd: "/w" }),
     queue.forTurn("trace-b").request({ command: "b", cwd: "/w" }),
@@ -206,9 +206,9 @@ test("HilApprovalQueue serializes concurrent approvals and stamps each proposal 
   ]);
 });
 
-test("HilApprovalQueue keeps draining after one prompt fails", async () => {
+test("HitlApprovalQueue keeps draining after one prompt fails", async () => {
   let calls = 0;
-  const queue = new HilApprovalQueue({
+  const queue = new HitlApprovalQueue({
     request: async proposal => {
       calls += 1;
       if (proposal.command === "boom") throw new Error("prompt failed");

@@ -29,7 +29,7 @@ export function formatExecResult(exitCode: number, output: string): string {
 
 export const EXEC_REJECTED_TEXT = "User rejected execution.";
 
-export const DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS = [
+export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "When you need to execute shell commands, read files, or inspect project state,",
   "strictly output the following format and halt generation immediately:",
   "[EXEC_REQUEST]",

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { EXEC_REJECTED_TEXT, formatExecResult, parseExecRequest } from "../src/hil/protocol";
+import { EXEC_REJECTED_TEXT, formatExecResult, parseExecRequest } from "../src/hitl/protocol";
 
 test("parses a well-formed EXEC_REQUEST block", () => {
   const text = [

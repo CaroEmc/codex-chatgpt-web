@@ -284,10 +284,10 @@ export interface CodexProviderConfig {
     lunaCheckpointStatePath?: string;
     /** Optional explicit safety ceiling. Browser turns have no absolute deadline by default. */
     turnTimeoutMs?: number;
-    /** Enables the HIL exec gate for browser-only turns (spec: docs/superpowers/specs/2026-09-13-hil-daemon-integration-design.md). */
-    hilEnabled?: boolean;
+    /** Enables the HITL exec gate for browser-only turns (spec: docs/superpowers/specs/2026-09-13-hitl-daemon-integration-design.md). */
+    hitlEnabled?: boolean;
     /** Workspace root EXEC_REQUEST cwd resolution is bounded to. Defaults to process.cwd(). */
-    hilWorkspaceCwd?: string;
+    hitlWorkspaceCwd?: string;
     /**
      * Seconds of adapter silence before the Responses bridge cancels a turn as a hung upstream.
      * The adapter heartbeats every CHATGPT_WEB_ADAPTER_HEARTBEAT_MS for the whole of a turn, so a

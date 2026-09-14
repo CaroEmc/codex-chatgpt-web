@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hil/approval";
-import { EXEC_REJECTED_TEXT } from "../src/hil/protocol";
-import { runApprovedCommand } from "../src/hil/exec";
+import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hitl/approval";
+import { EXEC_REJECTED_TEXT } from "../src/hitl/protocol";
+import { runApprovedCommand } from "../src/hitl/exec";
 
 class FixedGateway implements ApprovalGateway {
   seen: ExecProposal[] = [];
@@ -16,7 +16,7 @@ class FixedGateway implements ApprovalGateway {
 }
 
 test("an approved command runs and its output is wrapped in EXEC_RESULT", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "printf hello" });
     const result = await runApprovedCommand(gateway, { command: "printf hello" }, workspace);
@@ -27,7 +27,7 @@ test("an approved command runs and its output is wrapped in EXEC_RESULT", async 
 });
 
 test("a rejected command returns the literal rejection text and never spawns", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "reject" });
     const result = await runApprovedCommand(gateway, { command: "printf should-not-run" }, workspace);
@@ -38,7 +38,7 @@ test("a rejected command returns the literal rejection text and never spawns", a
 });
 
 test("a nonzero exit code is reported in the EXEC_RESULT block", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "exit 3" });
     const result = await runApprovedCommand(gateway, { command: "exit 3" }, workspace);
@@ -49,7 +49,7 @@ test("a nonzero exit code is reported in the EXEC_RESULT block", async () => {
 });
 
 test("output beyond 10KB is truncated", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "yes x | head -c 20000" });
     const result = await runApprovedCommand(gateway, { command: "yes x | head -c 20000" }, workspace);
@@ -61,7 +61,7 @@ test("output beyond 10KB is truncated", async () => {
 });
 
 test("a relative cwd is resolved against the workspace and passed through to the gateway", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     await runApprovedCommand(gateway, { command: "pwd", cwd: "." }, workspace);
@@ -72,7 +72,7 @@ test("a relative cwd is resolved against the workspace and passed through to the
 });
 
 test("a cwd escaping the workspace is rejected before reaching approval", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     const result = await runApprovedCommand(gateway, { command: "pwd", cwd: "../../etc" }, workspace);
@@ -84,7 +84,7 @@ test("a cwd escaping the workspace is rejected before reaching approval", async 
 });
 
 test("a gateway that throws is treated as a rejection and never crashes the caller", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     class ThrowingGateway implements ApprovalGateway {
       async request(): Promise<ApprovalDecision> {
@@ -100,7 +100,7 @@ test("a gateway that throws is treated as a rejection and never crashes the call
 });
 
 test("an omitted cwd defaults to the workspace root", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     await runApprovedCommand(gateway, { command: "pwd" }, workspace);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { ChatGptBrowserWorker, type BrowserTurn } from "../src/adapters/chatgpt-web/browser-worker";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
-import type { HilExecGate } from "../src/adapters/chatgpt-web/hil-interceptor";
+import type { HitlExecGate } from "../src/adapters/chatgpt-web/hitl-interceptor";
 import type { CodexProviderConfig } from "../src/types";
 
 /**
@@ -58,7 +58,7 @@ interface Harness {
   diagnosticsRoot: string;
   attachCalls: { prompt: string }[];
   sendCalls: number;
-  hilChecks: string[];
+  hitlChecks: string[];
   runTurn: (turn: Partial<BrowserTurn> & { onTextDelta: (delta: string) => void }) => Promise<string>;
   cleanup: () => void;
 }
@@ -75,15 +75,15 @@ function buildHarness(options: {
   /** visibleText returned by each successive assistant response, one entry per resume cycle */
   responses: string[];
 }): Harness {
-  const diagnosticsRoot = mkdtempSync(join(tmpdir(), "cgw-hil-gate-"));
+  const diagnosticsRoot = mkdtempSync(join(tmpdir(), "cgw-hitl-gate-"));
   const provider: CodexProviderConfig = {
     adapter: "chatgpt-web",
-    baseUrl: `browser://hil-gate-${Date.now()}-${Math.random()}`,
+    baseUrl: `browser://hitl-gate-${Date.now()}-${Math.random()}`,
     chatgptWeb: {
       localToolsEnabled: false,
       solAvailable: true,
       proAvailable: true,
-      storageStatePath: `/tmp/hil-gate-${Date.now()}-${Math.random()}.json`,
+      storageStatePath: `/tmp/hitl-gate-${Date.now()}-${Math.random()}.json`,
       browserDiagnosticsPath: diagnosticsRoot,
       ...(options.turnTimeoutMs !== undefined ? { turnTimeoutMs: options.turnTimeoutMs } : {}),
     },
@@ -167,7 +167,7 @@ function buildHarness(options: {
     partial: Partial<BrowserTurn> & { onTextDelta: (delta: string) => void },
   ): Promise<string> => {
     const turn: BrowserTurn = {
-      traceId: `hil-gate-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      traceId: `hitl-gate-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       modelId: CHATGPT_WEB_MODEL_ID,
       capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: true },
       prepare: async () => ({ text: "Hello Codex", images: [], release() {} }),
@@ -182,7 +182,7 @@ function buildHarness(options: {
     diagnosticsRoot,
     attachCalls,
     get sendCalls() { return sendCalls; },
-    hilChecks: [],
+    hitlChecks: [],
     runTurn,
     cleanup: () => rmSync(diagnosticsRoot, { recursive: true, force: true }),
   };
@@ -193,7 +193,7 @@ test("a resume verdict submits the exact follow-up text, and the turn only final
   try {
     const checks: string[] = [];
     let finalized = false;
-    const hilExecGate: HilExecGate = {
+    const hitlExecGate: HitlExecGate = {
       async check(finalText) {
         checks.push(finalText);
         if (checks.length === 1) {
@@ -207,7 +207,7 @@ test("a resume verdict submits the exact follow-up text, and the turn only final
     const deltas: string[] = [];
     const finalText = await harness.runTurn({
       onTextDelta: delta => deltas.push(delta),
-      hilExecGate,
+      hitlExecGate,
     });
 
     expect(checks).toEqual(["first answer", "second answer"]);
@@ -224,7 +224,7 @@ test("a resume verdict submits the exact follow-up text, and the turn only final
   }
 }, 20_000);
 
-test("runBrowserTurn hands the turn's own abortSignal to every hilExecGate check", async () => {
+test("runBrowserTurn hands the turn's own abortSignal to every hitlExecGate check", async () => {
   // The gate opens a blocking TTY prompt and then spawns a real shell command. Without the turn's
   // signal it cannot tell that Codex cancelled the turn while the operator was deciding, and would
   // run the command for a turn that no longer exists.
@@ -232,7 +232,7 @@ test("runBrowserTurn hands the turn's own abortSignal to every hilExecGate check
   try {
     const abort = new AbortController();
     const signals: (AbortSignal | undefined)[] = [];
-    const hilExecGate: HilExecGate = {
+    const hitlExecGate: HitlExecGate = {
       async check(_finalText, abortSignal) {
         signals.push(abortSignal);
         return signals.length === 1
@@ -240,7 +240,7 @@ test("runBrowserTurn hands the turn's own abortSignal to every hilExecGate check
           : { action: "finalize" };
       },
     };
-    await harness.runTurn({ onTextDelta: () => {}, hilExecGate, abortSignal: abort.signal });
+    await harness.runTurn({ onTextDelta: () => {}, hitlExecGate, abortSignal: abort.signal });
     expect(signals).toHaveLength(2);
     expect(signals.every(signal => signal === abort.signal)).toBeTrue();
   } finally {
@@ -253,7 +253,7 @@ test("two consecutive resume rounds stay inside one runBrowserTurn call without 
   try {
     const checks: string[] = [];
     let finalized = false;
-    const hilExecGate: HilExecGate = {
+    const hitlExecGate: HitlExecGate = {
       async check(finalText) {
         checks.push(finalText);
         if (checks.length === 1) {
@@ -269,7 +269,7 @@ test("two consecutive resume rounds stay inside one runBrowserTurn call without 
 
     const finalText = await harness.runTurn({
       onTextDelta: () => {},
-      hilExecGate,
+      hitlExecGate,
     });
 
     expect(checks).toEqual(["first answer", "second answer", "third answer"]);
@@ -290,10 +290,10 @@ test("two consecutive resume rounds stay inside one runBrowserTurn call without 
   }
 }, 20_000);
 
-test("a finite turnTimeoutMs is suppressed while hilExecGate is present, but still enforced without it", async () => {
+test("a finite turnTimeoutMs is suppressed while hitlExecGate is present, but still enforced without it", async () => {
   const withGate = buildHarness({ turnTimeoutMs: 1_000, responses: ["slow answer"] });
   try {
-    const hilExecGate: HilExecGate = {
+    const hitlExecGate: HitlExecGate = {
       async check() {
         // Long enough to exceed the configured 1s turnTimeoutMs, short enough to keep the test fast.
         await new Promise(resolve => setTimeout(resolve, 1_100));
@@ -302,7 +302,7 @@ test("a finite turnTimeoutMs is suppressed while hilExecGate is present, but sti
     };
     const finalText = await withGate.runTurn({
       onTextDelta: () => {},
-      hilExecGate,
+      hitlExecGate,
     });
     expect(finalText).toBe("slow answer");
   } finally {
@@ -310,7 +310,7 @@ test("a finite turnTimeoutMs is suppressed while hilExecGate is present, but sti
   }
 }, 20_000);
 
-test("the existing finite turnTimeoutMs still fires when hilExecGate is absent", async () => {
+test("the existing finite turnTimeoutMs still fires when hitlExecGate is absent", async () => {
   const withoutGate = buildHarness({ turnTimeoutMs: 250, responses: ["irrelevant"] });
   try {
     // Make the completion loop's own 250ms poll interval the reason it never observes completion
@@ -334,7 +334,7 @@ test("the existing finite turnTimeoutMs still fires when hilExecGate is absent",
   }
 }, 20_000);
 
-test("a turn with no hilExecGate finalizes on the first completionReady exactly as before", async () => {
+test("a turn with no hitlExecGate finalizes on the first completionReady exactly as before", async () => {
   const harness = buildHarness({ responses: ["only answer"] });
   try {
     const deltas: string[] = [];
@@ -342,7 +342,7 @@ test("a turn with no hilExecGate finalizes on the first completionReady exactly 
       onTextDelta: delta => deltas.push(delta),
     });
     expect(finalText).toBe("only answer");
-    // Exactly one attach+send: the hilExecGate branch never ran, so no follow-up was submitted.
+    // Exactly one attach+send: the hitlExecGate branch never ran, so no follow-up was submitted.
     expect(harness.attachCalls).toHaveLength(1);
     expect(harness.sendCalls).toBe(1);
   } finally {

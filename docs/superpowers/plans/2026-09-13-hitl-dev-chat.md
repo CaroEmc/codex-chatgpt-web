@@ -1,8 +1,8 @@
-# HIL Local Exec for DEV Chat Implementation Plan
+# HITL Local Exec for DEV Chat Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let `dev chat --hil` sessions ask the model to run local shell commands via a
+**Goal:** Let `dev chat --hitl` sessions ask the model to run local shell commands via a
 text protocol (`[EXEC_REQUEST]`/`[EXEC_RESULT]`), gated by an interactive terminal
 approval prompt, without touching `full` mode, the MCP tunnel, or the production
 browser-only daemon.
@@ -10,19 +10,19 @@ browser-only daemon.
 **Architecture:** `DevChatDriver.send()`'s existing bounded round-loop (`src/dev-chat/driver.ts`)
 already drives one real ChatGPT browser turn per `dev chat` message and can run several
 rounds under the same `turnId`. We add one more branch to that loop: when a round's final
-text matches the `[EXEC_REQUEST]` protocol and HIL is enabled, prompt for approval, run the
+text matches the `[EXEC_REQUEST]` protocol and HITL is enabled, prompt for approval, run the
 command locally, and feed `[EXEC_RESULT]` back as the next round's user message instead of
 returning. Detection/formatting lives in a new pure module; approval lives behind a small
 interface so a TTY implementation is swappable later.
 
 **Tech Stack:** TypeScript, Bun test runner, Node `child_process`/`node:readline/promises`.
 
-**Spec:** `docs/superpowers/specs/2026-09-13-hil-dev-chat-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-13-hitl-dev-chat-design.md`
 
 ## Global Constraints
 
-- HIL only activates when `config.mode !== "full"` (browser-only DEV sessions only);
-  requesting `--hil` under `mode: "full"` fails explicitly.
+- HITL only activates when `config.mode !== "full"` (browser-only DEV sessions only);
+  requesting `--hitl` under `mode: "full"` fails explicitly.
 - Command execution: `child_process.spawn(command, { cwd, shell: true, timeout: 60_000 })`;
   combined stdout+stderr truncated to the first 10KB.
 - `cwd` defaults to the dev-chat's own `cwd`; a requested `cwd` outside that workspace root
@@ -39,37 +39,37 @@ interface so a TTY implementation is swappable later.
 
 ## File Structure
 
-- **Create** `src/dev-chat/hil-protocol.ts` — pure parsing/formatting: `parseExecRequest`,
+- **Create** `src/dev-chat/hitl-protocol.ts` — pure parsing/formatting: `parseExecRequest`,
   `formatExecResult`, `EXEC_REJECTED_TEXT`. No I/O, fully unit-testable.
-- **Create** `src/dev-chat/hil-approval.ts` — `ApprovalGateway` interface,
+- **Create** `src/dev-chat/hitl-approval.ts` — `ApprovalGateway` interface,
   `ExecProposal`/`ApprovalDecision` types, `TtyApprovalGateway` implementation using
   `node:readline/promises`.
-- **Create** `src/dev-chat/hil-exec.ts` — `runApprovedCommand(gateway, proposal, workspaceCwd)`:
+- **Create** `src/dev-chat/hitl-exec.ts` — `runApprovedCommand(gateway, proposal, workspaceCwd)`:
   resolves/validates `cwd`, calls the approval gateway, spawns the process on approval,
   captures/truncates output, and returns the formatted result text (or the rejection text).
   This is the one seam that talks to both the approval gateway and `child_process`, kept
   separate from the pure protocol module so it can be tested with a fake gateway and real
   (but trivial, deterministic) subprocesses.
-- **Modify** `src/dev-chat/session.ts` — add `hilEnabled: boolean` to `DevChatState`/`stateSchema`
+- **Modify** `src/dev-chat/session.ts` — add `hitlEnabled: boolean` to `DevChatState`/`stateSchema`
   (default `false` for existing/new chats).
-- **Modify** `src/dev-chat/driver.ts` — add `DEV_CHAT_HIL_INSTRUCTIONS`, wire `hilEnabled` into
-  `requestBody()`'s instruction selection, add the HIL branch inside `send()`'s round loop,
-  add a `setHil` method (mirroring `setModel`) and a constructor-injected `approvalGateway`
+- **Modify** `src/dev-chat/driver.ts` — add `DEV_CHAT_HITL_INSTRUCTIONS`, wire `hitlEnabled` into
+  `requestBody()`'s instruction selection, add the HITL branch inside `send()`'s round loop,
+  add a `setHitl` method (mirroring `setModel`) and a constructor-injected `approvalGateway`
   (defaulting to `TtyApprovalGateway`) so tests can substitute a fake gateway.
-- **Modify** `src/dev-chat/cli.ts` — add `--hil` flag parsing, help text, mode-mismatch error,
+- **Modify** `src/dev-chat/cli.ts` — add `--hitl` flag parsing, help text, mode-mismatch error,
   and `EventRenderer` support for a new `DevChatEvent` variant reporting exec
   proposals/results.
-- **Test** `tests/hil-protocol.test.ts` — new, for the pure module.
-- **Test** `tests/hil-approval.test.ts` — new, for the TTY gateway.
-- **Test** `tests/dev-chat.test.ts` — extend with an end-to-end `send()` HIL round-trip test.
+- **Test** `tests/hitl-protocol.test.ts` — new, for the pure module.
+- **Test** `tests/hitl-approval.test.ts` — new, for the TTY gateway.
+- **Test** `tests/dev-chat.test.ts` — extend with an end-to-end `send()` HITL round-trip test.
 
 ---
 
 ### Task 1: Protocol parsing and formatting
 
 **Files:**
-- Create: `src/dev-chat/hil-protocol.ts`
-- Test: `tests/hil-protocol.test.ts`
+- Create: `src/dev-chat/hitl-protocol.ts`
+- Test: `tests/hitl-protocol.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -77,16 +77,16 @@ interface so a TTY implementation is swappable later.
   - `function parseExecRequest(text: string): ParsedExecRequest | undefined`
   - `function formatExecResult(exitCode: number, output: string): string`
   - `const EXEC_REJECTED_TEXT = "User rejected execution."`
-  - `const DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS: string` — the PRD §3.1 system-prompt block,
+  - `const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS: string` — the PRD §3.1 system-prompt block,
     exported here so `driver.ts` can compose it into its instructions constant without
     duplicating the literal text.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```typescript
-// tests/hil-protocol.test.ts
+// tests/hitl-protocol.test.ts
 import { expect, test } from "bun:test";
-import { EXEC_REJECTED_TEXT, formatExecResult, parseExecRequest } from "../src/dev-chat/hil-protocol";
+import { EXEC_REJECTED_TEXT, formatExecResult, parseExecRequest } from "../src/dev-chat/hitl-protocol";
 
 test("parses a well-formed EXEC_REQUEST block", () => {
   const text = [
@@ -148,13 +148,13 @@ test("the rejection text is the exact literal the model should see", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test tests/hil-protocol.test.ts`
-Expected: FAIL — `Cannot find module '../src/dev-chat/hil-protocol'`
+Run: `bun test tests/hitl-protocol.test.ts`
+Expected: FAIL — `Cannot find module '../src/dev-chat/hitl-protocol'`
 
 - [ ] **Step 3: Implement the protocol module**
 
 ```typescript
-// src/dev-chat/hil-protocol.ts
+// src/dev-chat/hitl-protocol.ts
 export interface ParsedExecRequest {
   command: string;
   cwd?: string;
@@ -186,7 +186,7 @@ export function formatExecResult(exitCode: number, output: string): string {
 
 export const EXEC_REJECTED_TEXT = "User rejected execution.";
 
-export const DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS = [
+export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "When you need to execute shell commands, read files, or inspect project state,",
   "strictly output the following format and halt generation immediately:",
   "[EXEC_REQUEST]",
@@ -200,14 +200,14 @@ export const DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS = [
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `bun test tests/hil-protocol.test.ts`
+Run: `bun test tests/hitl-protocol.test.ts`
 Expected: PASS (8 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/dev-chat/hil-protocol.ts tests/hil-protocol.test.ts
-git commit -m "feat: add EXEC_REQUEST/EXEC_RESULT protocol parsing for dev chat HIL"
+git add src/dev-chat/hitl-protocol.ts tests/hitl-protocol.test.ts
+git commit -m "feat: add EXEC_REQUEST/EXEC_RESULT protocol parsing for dev chat HITL"
 ```
 
 ---
@@ -215,8 +215,8 @@ git commit -m "feat: add EXEC_REQUEST/EXEC_RESULT protocol parsing for dev chat 
 ### Task 2: TTY approval gateway
 
 **Files:**
-- Create: `src/dev-chat/hil-approval.ts`
-- Test: `tests/hil-approval.test.ts`
+- Create: `src/dev-chat/hitl-approval.ts`
+- Test: `tests/hitl-approval.test.ts`
 
 **Interfaces:**
 - Consumes: nothing from Task 1 directly (approval decisions are protocol-agnostic).
@@ -230,10 +230,10 @@ git commit -m "feat: add EXEC_REQUEST/EXEC_RESULT protocol parsing for dev chat 
 - [ ] **Step 1: Write the failing tests**
 
 ```typescript
-// tests/hil-approval.test.ts
+// tests/hitl-approval.test.ts
 import { expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
-import { TtyApprovalGateway } from "../src/dev-chat/hil-approval";
+import { TtyApprovalGateway } from "../src/dev-chat/hitl-approval";
 
 function fakeTty(isTTY: boolean): { input: PassThrough & { isTTY?: boolean }; output: PassThrough; written: () => string } {
   const input = new PassThrough() as PassThrough & { isTTY?: boolean };
@@ -312,13 +312,13 @@ test("the proposal box is rendered before a decision arrives", async () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test tests/hil-approval.test.ts`
-Expected: FAIL — `Cannot find module '../src/dev-chat/hil-approval'`
+Run: `bun test tests/hitl-approval.test.ts`
+Expected: FAIL — `Cannot find module '../src/dev-chat/hitl-approval'`
 
 - [ ] **Step 3: Implement the gateway**
 
 ```typescript
-// src/dev-chat/hil-approval.ts
+// src/dev-chat/hitl-approval.ts
 import { createInterface } from "node:readline/promises";
 
 export interface ExecProposal {
@@ -379,14 +379,14 @@ export class TtyApprovalGateway implements ApprovalGateway {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `bun test tests/hil-approval.test.ts`
+Run: `bun test tests/hitl-approval.test.ts`
 Expected: PASS (7 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/dev-chat/hil-approval.ts tests/hil-approval.test.ts
-git commit -m "feat: add TTY approval gateway for dev chat HIL"
+git add src/dev-chat/hitl-approval.ts tests/hitl-approval.test.ts
+git commit -m "feat: add TTY approval gateway for dev chat HITL"
 ```
 
 ---
@@ -394,13 +394,13 @@ git commit -m "feat: add TTY approval gateway for dev chat HIL"
 ### Task 3: Command execution + workspace-boundary enforcement
 
 **Files:**
-- Create: `src/dev-chat/hil-exec.ts`
-- Test: `tests/hil-exec.test.ts`
+- Create: `src/dev-chat/hitl-exec.ts`
+- Test: `tests/hitl-exec.test.ts`
 
 **Interfaces:**
 - Consumes:
-  - `ApprovalGateway`, `ExecProposal`, `ApprovalDecision` from `src/dev-chat/hil-approval.ts`
-  - `formatExecResult`, `EXEC_REJECTED_TEXT` from `src/dev-chat/hil-protocol.ts`
+  - `ApprovalGateway`, `ExecProposal`, `ApprovalDecision` from `src/dev-chat/hitl-approval.ts`
+  - `formatExecResult`, `EXEC_REJECTED_TEXT` from `src/dev-chat/hitl-protocol.ts`
 - Produces:
   - `interface RawExecRequest { command: string; cwd?: string; reason?: string }` (same
     shape as `ParsedExecRequest`, imported by `driver.ts` as that type)
@@ -411,14 +411,14 @@ git commit -m "feat: add TTY approval gateway for dev chat HIL"
 - [ ] **Step 1: Write the failing tests**
 
 ```typescript
-// tests/hil-exec.test.ts
+// tests/hitl-exec.test.ts
 import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/dev-chat/hil-approval";
-import { EXEC_REJECTED_TEXT } from "../src/dev-chat/hil-protocol";
-import { runApprovedCommand } from "../src/dev-chat/hil-exec";
+import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/dev-chat/hitl-approval";
+import { EXEC_REJECTED_TEXT } from "../src/dev-chat/hitl-protocol";
+import { runApprovedCommand } from "../src/dev-chat/hitl-exec";
 
 class FixedGateway implements ApprovalGateway {
   seen: ExecProposal[] = [];
@@ -430,7 +430,7 @@ class FixedGateway implements ApprovalGateway {
 }
 
 test("an approved command runs and its output is wrapped in EXEC_RESULT", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "printf hello" });
     const result = await runApprovedCommand(gateway, { command: "printf hello" }, workspace);
@@ -441,7 +441,7 @@ test("an approved command runs and its output is wrapped in EXEC_RESULT", async 
 });
 
 test("a rejected command returns the literal rejection text and never spawns", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "reject" });
     const result = await runApprovedCommand(gateway, { command: "printf should-not-run" }, workspace);
@@ -452,7 +452,7 @@ test("a rejected command returns the literal rejection text and never spawns", a
 });
 
 test("a nonzero exit code is reported in the EXEC_RESULT block", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "exit 3" });
     const result = await runApprovedCommand(gateway, { command: "exit 3" }, workspace);
@@ -463,7 +463,7 @@ test("a nonzero exit code is reported in the EXEC_RESULT block", async () => {
 });
 
 test("output beyond 10KB is truncated", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "yes x | head -c 20000" });
     const result = await runApprovedCommand(gateway, { command: "yes x | head -c 20000" }, workspace);
@@ -475,7 +475,7 @@ test("output beyond 10KB is truncated", async () => {
 });
 
 test("a relative cwd is resolved against the workspace and passed through to the gateway", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     await runApprovedCommand(gateway, { command: "pwd", cwd: "." }, workspace);
@@ -486,7 +486,7 @@ test("a relative cwd is resolved against the workspace and passed through to the
 });
 
 test("a cwd escaping the workspace is rejected before reaching approval", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     const result = await runApprovedCommand(gateway, { command: "pwd", cwd: "../../etc" }, workspace);
@@ -498,7 +498,7 @@ test("a cwd escaping the workspace is rejected before reaching approval", async 
 });
 
 test("an omitted cwd defaults to the workspace root", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "hil-exec-"));
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     await runApprovedCommand(gateway, { command: "pwd" }, workspace);
@@ -511,17 +511,17 @@ test("an omitted cwd defaults to the workspace root", async () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test tests/hil-exec.test.ts`
-Expected: FAIL — `Cannot find module '../src/dev-chat/hil-exec'`
+Run: `bun test tests/hitl-exec.test.ts`
+Expected: FAIL — `Cannot find module '../src/dev-chat/hitl-exec'`
 
 - [ ] **Step 3: Implement execution**
 
 ```typescript
-// src/dev-chat/hil-exec.ts
+// src/dev-chat/hitl-exec.ts
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import type { ApprovalGateway } from "./hil-approval";
-import { EXEC_REJECTED_TEXT, formatExecResult } from "./hil-protocol";
+import type { ApprovalGateway } from "./hitl-approval";
+import { EXEC_REJECTED_TEXT, formatExecResult } from "./hitl-protocol";
 
 export interface RawExecRequest {
   command: string;
@@ -582,19 +582,19 @@ export async function runApprovedCommand(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `bun test tests/hil-exec.test.ts`
+Run: `bun test tests/hitl-exec.test.ts`
 Expected: PASS (7 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/dev-chat/hil-exec.ts tests/hil-exec.test.ts
-git commit -m "feat: execute approved dev chat HIL commands within the workspace boundary"
+git add src/dev-chat/hitl-exec.ts tests/hitl-exec.test.ts
+git commit -m "feat: execute approved dev chat HITL commands within the workspace boundary"
 ```
 
 ---
 
-### Task 4: Persist `hilEnabled` on DevChatState
+### Task 4: Persist `hitlEnabled` on DevChatState
 
 **Files:**
 - Modify: `src/dev-chat/session.ts`
@@ -602,7 +602,7 @@ git commit -m "feat: execute approved dev chat HIL commands within the workspace
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `DevChatState.hilEnabled: boolean` (defaults to `false` for chats created
+- Produces: `DevChatState.hitlEnabled: boolean` (defaults to `false` for chats created
   before this field existed, via a Zod default).
 
 - [ ] **Step 1: Write the failing test**
@@ -611,20 +611,20 @@ Add to `tests/dev-chat.test.ts` (near the existing `"named DEV state and determi
 context filler persist independently"` test):
 
 ```typescript
-test("hilEnabled defaults to false and persists once set", () => {
-  const root = scratch("cgw-dev-hil-state");
+test("hitlEnabled defaults to false and persists once set", () => {
+  const root = scratch("cgw-dev-hitl-state");
   const store = new DevChatStore(join(root, "chats"));
-  const opened = store.loadOrCreate("hil-lab", "chatgpt-web/high", root);
-  expect(opened.state.hilEnabled).toBe(false);
-  opened.state.hilEnabled = true;
+  const opened = store.loadOrCreate("hitl-lab", "chatgpt-web/high", root);
+  expect(opened.state.hitlEnabled).toBe(false);
+  opened.state.hitlEnabled = true;
   store.save(opened.state);
-  expect(store.load("hil-lab")).toMatchObject({ hilEnabled: true });
+  expect(store.load("hitl-lab")).toMatchObject({ hitlEnabled: true });
 });
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `bun test tests/dev-chat.test.ts -t "hilEnabled"`
+Run: `bun test tests/dev-chat.test.ts -t "hitlEnabled"`
 Expected: FAIL — `expect(received).toBe(expected)` — `received` is `undefined`, not `false`
 (the schema does not yet define the field)
 
@@ -643,7 +643,7 @@ const stateSchema = z.object({
   turns: z.number().int().nonnegative(),
   compactions: z.number().int().nonnegative(),
   syntheticFills: z.number().int().nonnegative(),
-  hilEnabled: z.boolean().default(false),
+  hitlEnabled: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
   lastUsage: usageSchema.optional(),
@@ -661,19 +661,19 @@ export interface DevChatState {
   turns: number;
   compactions: number;
   syntheticFills: number;
-  hilEnabled: boolean;
+  hitlEnabled: boolean;
   createdAt: string;
   updatedAt: string;
   lastUsage?: DevChatUsage;
 }
 ```
 
-And in `DevChatStore.loadOrCreate`'s new-state literal, add `hilEnabled: false,` alongside
+And in `DevChatStore.loadOrCreate`'s new-state literal, add `hitlEnabled: false,` alongside
 `syntheticFills: 0,`.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `bun test tests/dev-chat.test.ts -t "hilEnabled"`
+Run: `bun test tests/dev-chat.test.ts -t "hitlEnabled"`
 Expected: PASS
 
 - [ ] **Step 5: Run the full dev-chat suite to confirm no regressions**
@@ -685,12 +685,12 @@ Expected: PASS (all tests, including the new one)
 
 ```bash
 git add src/dev-chat/session.ts tests/dev-chat.test.ts
-git commit -m "feat: persist hilEnabled on DevChatState"
+git commit -m "feat: persist hitlEnabled on DevChatState"
 ```
 
 ---
 
-### Task 5: Wire HIL into DevChatDriver's instructions and round loop
+### Task 5: Wire HITL into DevChatDriver's instructions and round loop
 
 **Files:**
 - Modify: `src/dev-chat/driver.ts`
@@ -698,17 +698,17 @@ git commit -m "feat: persist hilEnabled on DevChatState"
 
 **Interfaces:**
 - Consumes:
-  - `parseExecRequest`, `DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS` from `src/dev-chat/hil-protocol.ts`
-  - `runApprovedCommand`, `RawExecRequest` from `src/dev-chat/hil-exec.ts`
-  - `ApprovalGateway`, `TtyApprovalGateway` from `src/dev-chat/hil-approval.ts`
-  - `DevChatState.hilEnabled` from Task 4
+  - `parseExecRequest`, `DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS` from `src/dev-chat/hitl-protocol.ts`
+  - `runApprovedCommand`, `RawExecRequest` from `src/dev-chat/hitl-exec.ts`
+  - `ApprovalGateway`, `TtyApprovalGateway` from `src/dev-chat/hitl-approval.ts`
+  - `DevChatState.hitlEnabled` from Task 4
 - Produces:
   - `DevChatDriver` constructor gains an optional 6th parameter `approvalGateway:
     ApprovalGateway = new TtyApprovalGateway()`, stored as `private readonly
     approvalGateway`.
-  - `DevChatDriver.setHil(state: DevChatState, enabled: boolean): void` (mirrors `setModel`;
+  - `DevChatDriver.setHitl(state: DevChatState, enabled: boolean): void` (mirrors `setModel`;
     throws if `enabled` and `this.config.mode === "full"`).
-  - `send()`'s behavior: when `state.hilEnabled` and a round's tool-free output matches
+  - `send()`'s behavior: when `state.hitlEnabled` and a round's tool-free output matches
     `parseExecRequest`, the round loop continues instead of returning, and the resulting
     `EXEC_RESULT`/rejection text is appended as the next round's user message via
     `currentTurnItems`-shaped input.
@@ -718,8 +718,8 @@ git commit -m "feat: persist hilEnabled on DevChatState"
 Add to `tests/dev-chat.test.ts`:
 
 ```typescript
-test("hilEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT back before the final answer", async () => {
-  const root = scratch("cgw-dev-hil-roundtrip");
+test("hitlEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT back before the final answer", async () => {
+  const root = scratch("cgw-dev-hitl-roundtrip");
   const config = {
     ...defaultConfig("browser-only"),
     purpose: "dev-harness" as const,
@@ -728,7 +728,7 @@ test("hilEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT back
   };
   let round = 0;
   const factory = (): ProviderAdapter => ({
-    name: "dev-hil-test",
+    name: "dev-hitl-test",
     async runTurn(parsed, _incoming, emit) {
       round += 1;
       if (round === 1) {
@@ -758,15 +758,15 @@ test("hilEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT back
     undefined,
     gateway,
   );
-  const state = driver.open("hil-roundtrip", "chatgpt-web/extra-high").state;
-  driver.setHil(state, true);
+  const state = driver.open("hitl-roundtrip", "chatgpt-web/extra-high").state;
+  driver.setHitl(state, true);
   const result = await driver.send(state, "Please greet me.");
   expect(result.text).toBe("Done: hello");
   expect(approvals).toHaveLength(1);
 });
 
-test("setHil rejects enabling HIL under full mode", () => {
-  const root = scratch("cgw-dev-hil-full-mode");
+test("setHitl rejects enabling HITL under full mode", () => {
+  const root = scratch("cgw-dev-hitl-full-mode");
   const driver = new DevChatDriver(
     defaultConfig("full"),
     new DevChatStore(join(root, "chats")),
@@ -775,8 +775,8 @@ test("setHil rejects enabling HIL under full mode", () => {
     },
     root,
   );
-  const state = driver.open("hil-full").state;
-  expect(() => driver.setHil(state, true)).toThrow("not available");
+  const state = driver.open("hitl-full").state;
+  expect(() => driver.setHitl(state, true)).toThrow("not available");
 });
 ```
 
@@ -787,34 +787,34 @@ positional parameter is `features` (already optional with a default), so the new
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `bun test tests/dev-chat.test.ts -t "hilEnabled sessions|setHil rejects"`
-Expected: FAIL — `driver.setHil is not a function`
+Run: `bun test tests/dev-chat.test.ts -t "hitlEnabled sessions|setHitl rejects"`
+Expected: FAIL — `driver.setHitl is not a function`
 
 - [ ] **Step 3: Implement the wiring**
 
 In `src/dev-chat/driver.ts`, add imports:
 
 ```typescript
-import { TtyApprovalGateway, type ApprovalGateway } from "./hil-approval";
-import { runApprovedCommand } from "./hil-exec";
-import { DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS, parseExecRequest } from "./hil-protocol";
+import { TtyApprovalGateway, type ApprovalGateway } from "./hitl-approval";
+import { runApprovedCommand } from "./hitl-exec";
+import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS, parseExecRequest } from "./hitl-protocol";
 ```
 
-Add a HIL-flavored instructions constant next to `DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS`:
+Add a HITL-flavored instructions constant next to `DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS`:
 
 ```typescript
-export const DEV_CHAT_HIL_INSTRUCTIONS = [
+export const DEV_CHAT_HITL_INSTRUCTIONS = [
   "You are running inside the Codex Web GPT DEV outer-harness simulator.",
   "Behave like the normal Codex model backend.",
   "This browser-only DEV profile exposes no structured outer tools, but you may request",
   "local command execution using the protocol below; a human reviews every request before",
   "it runs.",
-  DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS,
+  DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS,
 ].join(" ");
 ```
 
 Update `requestBody()`'s instructions selection (it currently takes `localToolsEnabled:
-boolean`; add a `hilEnabled: boolean` parameter):
+boolean`; add a `hitlEnabled: boolean` parameter):
 
 ```typescript
 function requestBody(
@@ -824,13 +824,13 @@ function requestBody(
   input: unknown[],
   stream: boolean,
   localToolsEnabled: boolean,
-  hilEnabled: boolean,
+  hitlEnabled: boolean,
 ): Record<string, unknown> {
   return {
     model: state.model,
     instructions: localToolsEnabled
       ? DEV_CHAT_SYSTEM_INSTRUCTIONS
-      : (hilEnabled ? DEV_CHAT_HIL_INSTRUCTIONS : DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS),
+      : (hitlEnabled ? DEV_CHAT_HITL_INSTRUCTIONS : DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS),
     input,
     tools: localToolsEnabled ? DEV_CHAT_TOOLS : [],
     tool_choice: "auto",
@@ -848,13 +848,13 @@ function requestBody(
 ```
 
 Update every existing call site of `requestBody` (`status`, `send`, `statusForInput`) to
-pass `state.hilEnabled` as the new final argument — e.g. in `send()`:
+pass `state.hitlEnabled` as the new final argument — e.g. in `send()`:
 
 ```typescript
-const body = requestBody(state, this.cwd, turnId, workingInput, false, this.config.mode === "full", state.hilEnabled);
+const body = requestBody(state, this.cwd, turnId, workingInput, false, this.config.mode === "full", state.hitlEnabled);
 ```
 
-Update the class constructor and add `setHil`:
+Update the class constructor and add `setHitl`:
 
 ```typescript
 export class DevChatDriver {
@@ -867,16 +867,16 @@ export class DevChatDriver {
     private readonly approvalGateway: ApprovalGateway = new TtyApprovalGateway(),
   ) {}
 
-  setHil(state: DevChatState, enabled: boolean): void {
+  setHitl(state: DevChatState, enabled: boolean): void {
     if (enabled && this.config.mode === "full") {
-      throw new Error("HIL local execution is not available while full mode's real tool calls are active");
+      throw new Error("HITL local execution is not available while full mode's real tool calls are active");
     }
-    state.hilEnabled = enabled;
+    state.hitlEnabled = enabled;
     this.store.save(state);
   }
 ```
 
-Add the HIL branch inside `send()`'s round loop, replacing the current
+Add the HITL branch inside `send()`'s round loop, replacing the current
 `if (calls.length === 0) { ... }` block:
 
 ```typescript
@@ -886,13 +886,13 @@ Add the HIL branch inside `send()`'s round loop, replacing the current
           throw new Error("DEV Responses turn completed without tool calls or end_turn=true");
         }
         const roundText = outputText(output);
-        const execRequest = state.hilEnabled ? parseExecRequest(roundText) : undefined;
+        const execRequest = state.hitlEnabled ? parseExecRequest(roundText) : undefined;
         if (execRequest) {
           const resultText = await runApprovedCommand(this.approvalGateway, execRequest, this.cwd);
-          const execTurnId = id("dev_hil_turn");
+          const execTurnId = id("dev_hitl_turn");
           workingInput.push({
             type: "message",
-            id: id("msg_dev_hil"),
+            id: id("msg_dev_hitl"),
             role: "user",
             content: [{ type: "input_text", text: resultText }],
             internal_chat_message_metadata_passthrough: { turn_id: turnId },
@@ -923,7 +923,7 @@ here only so the implementer notices and deletes them instead of leaving dead co
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `bun test tests/dev-chat.test.ts -t "hilEnabled sessions|setHil rejects"`
+Run: `bun test tests/dev-chat.test.ts -t "hitlEnabled sessions|setHitl rejects"`
 Expected: PASS
 
 - [ ] **Step 5: Run the full dev-chat suite**
@@ -945,14 +945,14 @@ git commit -m "feat: run approved EXEC_REQUEST commands inside DevChatDriver's r
 
 ---
 
-### Task 6: CLI `--hil` flag and event rendering
+### Task 6: CLI `--hitl` flag and event rendering
 
 **Files:**
 - Modify: `src/dev-chat/cli.ts`
 
 **Interfaces:**
-- Consumes: `DevChatDriver.setHil` from Task 5.
-- Produces: `dev chat NAME --hil [MESSAGE]` CLI usage; no new exported types (this task is
+- Consumes: `DevChatDriver.setHitl` from Task 5.
+- Produces: `dev chat NAME --hitl [MESSAGE]` CLI usage; no new exported types (this task is
   CLI wiring only).
 
 - [ ] **Step 1: Locate and update the `dev chat` command parsing**
@@ -961,13 +961,13 @@ Find where `dev chat` parses `--model` (via `takeOption(args, "--model")`) in
 `src/dev-chat/cli.ts`'s command dispatch, and add a sibling flag:
 
 ```typescript
-const hilRequested = takeFlag(args, "--hil");
+const hitlRequested = takeFlag(args, "--hitl");
 ```
 
 After the chat is opened (`driver.open(name, model)`), apply it:
 
 ```typescript
-if (hilRequested) driver.setHil(opened.state, true);
+if (hitlRequested) driver.setHitl(opened.state, true);
 ```
 
 Wrap that call so a `mode === "full"` mismatch produces the same clear top-level error
@@ -981,16 +981,16 @@ one).
 In `DEV_HELP`, change the `dev chat` usage line to:
 
 ```
-  codex-chatgpt-web dev chat NAME [--model MODEL] [--hil] [MESSAGE]
+  codex-chatgpt-web dev chat NAME [--model MODEL] [--hitl] [MESSAGE]
 ```
 
 and add a line under "Interactive commands" documenting `/help` already covers session
-commands — no new slash command is introduced; `--hil` is a launch-time flag only.
+commands — no new slash command is introduced; `--hitl` is a launch-time flag only.
 
 - [ ] **Step 3: Manually verify**
 
-Run: `bun run dev:chat hil-smoke --hil "reply with plain text only, no commands needed"`
-Expected: chat opens, HIL instructions are active, and since the model is asked not to
+Run: `bun run dev:chat hitl-smoke --hitl "reply with plain text only, no commands needed"`
+Expected: chat opens, HITL instructions are active, and since the model is asked not to
 request a command, it returns a normal final answer. This is a manual smoke check (no
 automated CLI test exists in this codebase for `dev chat`'s interactive/CLI layer beyond
 `tests/dev-chat.test.ts`'s driver-level tests already extended in Tasks 4-5).
@@ -999,7 +999,7 @@ automated CLI test exists in this codebase for `dev chat`'s interactive/CLI laye
 
 ```bash
 git add src/dev-chat/cli.ts
-git commit -m "feat: add --hil flag to dev chat CLI"
+git commit -m "feat: add --hitl flag to dev chat CLI"
 ```
 
 ---
@@ -1020,5 +1020,5 @@ git commit -m "feat: add --hil flag to dev chat CLI"
   `parseExecRequest`'s return type directly into `runApprovedCommand`'s parameter, so no
   divergent duplicate type is introduced — confirmed the two names describe one shape, not
   two competing ones. `ApprovalGateway`/`ExecProposal`/`ApprovalDecision` are defined once
-  in Task 2 and reused verbatim by Tasks 3 and 5. `hilEnabled` (Task 4) is read the same way
+  in Task 2 and reused verbatim by Tasks 3 and 5. `hitlEnabled` (Task 4) is read the same way
   in Task 5's `requestBody` and round-loop branch as it's written in Task 6's CLI flag.

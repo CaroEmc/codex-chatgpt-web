@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createInterface } from "node:readline/promises";
 import { PassThrough } from "node:stream";
-import { TtyApprovalGateway } from "../src/hil/approval";
+import { TtyApprovalGateway } from "../src/hitl/approval";
 
 function fakeTty(isTTY: boolean): { input: PassThrough & { isTTY?: boolean }; output: PassThrough; written: () => string } {
   const input = new PassThrough() as PassThrough & { isTTY?: boolean };
@@ -93,7 +93,7 @@ test("a shared readline.Interface lets a REPL prompt and a mid-session approval 
 });
 
 test("a proposal carrying a traceId labels the prompt with the requesting turn", async () => {
-  // Concurrent daemon HIL turns share one terminal; without the turn label an operator cannot
+  // Concurrent daemon HITL turns share one terminal; without the turn label an operator cannot
   // tell which turn is asking. Single-session callers (dev chat) pass no traceId and see no line.
   const { input, output, written } = fakeTty(true);
   const gateway = new TtyApprovalGateway(input, output);

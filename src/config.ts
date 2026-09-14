@@ -67,7 +67,7 @@ export interface AppConfig {
   purpose?: "dev-harness";
   releaseVersion: string;
   mode: RuntimeMode;
-  hilEnabled: boolean;
+  hitlEnabled: boolean;
   subagentProtocol: SubagentProtocol;
   host: "127.0.0.1";
   port: number;
@@ -110,7 +110,7 @@ export function tunnelConfigForInteractionMode(
   return mode === "automatic" ? config.tunnel : undefined;
 }
 
-export function resolveHilActivation(
+export function resolveHitlActivation(
   requested: boolean,
   mode: RuntimeMode,
   stdinIsTty: boolean,
@@ -119,13 +119,13 @@ export function resolveHilActivation(
   if (mode !== "browser-only") {
     return {
       enabled: false,
-      warning: "HIL requires browser-only mode; the daemon is running in full mode. HIL is disabled for this process.",
+      warning: "HITL requires browser-only mode; the daemon is running in full mode. HITL is disabled for this process.",
     };
   }
   if (!stdinIsTty) {
     return {
       enabled: false,
-      warning: "HIL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HIL is disabled for this process.",
+      warning: "HITL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HITL is disabled for this process.",
     };
   }
   return { enabled: true };
@@ -218,7 +218,7 @@ export function defaultConfig(mode: RuntimeMode = "browser-only"): AppConfig {
     version: 3,
     releaseVersion: VERSION,
     mode,
-    hilEnabled: false,
+    hitlEnabled: false,
     subagentProtocol: "compatibility-v1",
     host: "127.0.0.1",
     port: 17841,
@@ -596,8 +596,8 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       experimentalBiggerContext: manual ? false : config.experimentalBiggerContext,
       ...(config.stallTimeoutSec !== undefined ? { stallTimeoutSec: config.stallTimeoutSec } : {}),
       autoApproveToolCalls: manual ? false : config.autoApproveToolCalls,
-      hilEnabled: config.hilEnabled,
-      hilWorkspaceCwd: process.cwd(),
+      hitlEnabled: config.hitlEnabled,
+      hitlWorkspaceCwd: process.cwd(),
     },
   };
 }

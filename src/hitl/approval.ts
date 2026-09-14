@@ -4,7 +4,7 @@ export interface ExecProposal {
   command: string;
   cwd: string;
   reason?: string;
-  /** Identifies the requesting turn when several can prompt on one terminal (daemon HIL).
+  /** Identifies the requesting turn when several can prompt on one terminal (daemon HITL).
    * Absent for single-session callers such as `dev chat`, whose rendering is unchanged. */
   traceId?: string;
 }

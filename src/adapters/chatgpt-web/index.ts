@@ -18,13 +18,13 @@ import {
   type LauncherManualTurnStart,
 } from "../../launcher-browser-host";
 import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
-import { TtyApprovalGateway, type ApprovalGateway } from "../../hil/approval";
+import { TtyApprovalGateway, type ApprovalGateway } from "../../hitl/approval";
 import type { ProviderAdapter } from "../base";
 import { parseDataUrl } from "../image";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity, priorChatGptAbortedTurnIds } from "./environment";
-import { createHilEmitFilter, createHilExecGate, HilApprovalQueue } from "./hil-interceptor";
+import { createHitlEmitFilter, createHitlExecGate, HitlApprovalQueue } from "./hitl-interceptor";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt";
 import { createChatGptStructuredOutputValidator } from "./output-validation";
@@ -343,8 +343,8 @@ export function createChatGptWebAdapter(
   dependencies: {
     broker?: TurnBrokerOwner;
     zeroRiskManualControl?: ChatGptZeroRiskManualControl;
-    /** Approval surface for HIL local exec; defaults to the daemon's own terminal. */
-    hilApprovalGateway?: ApprovalGateway;
+    /** Approval surface for HITL local exec; defaults to the daemon's own terminal. */
+    hitlApprovalGateway?: ApprovalGateway;
   } = {},
 ): ProviderAdapter {
   const worker = ChatGptBrowserWorker.forProvider(provider);
@@ -352,7 +352,7 @@ export function createChatGptWebAdapter(
   const zeroRiskManualControl = dependencies.zeroRiskManualControl ?? launcherZeroRiskManualControl;
   const structuredBroker = broker instanceof TurnBroker ? broker : undefined;
   const timeoutMs = provider.chatgptWeb?.turnTimeoutMs;
-  const hilActive = provider.chatgptWeb?.hilEnabled === true;
+  const hitlActive = provider.chatgptWeb?.hitlEnabled === true;
   const experimentalBiggerContext = provider.chatgptWeb?.experimentalBiggerContext;
   if (experimentalBiggerContext !== undefined && typeof experimentalBiggerContext !== "boolean") {
     throw new Error("ChatGPT Bigger Context preference must be a boolean");
@@ -368,20 +368,20 @@ export function createChatGptWebAdapter(
     && provider.chatgptWeb.browserHostDescriptorPath
       ? resolve(expandUserPath(provider.chatgptWeb.browserHostDescriptorPath))
       : undefined;
-  if (hilActive && provider.chatgptWeb?.browserHost === "launcher") {
+  if (hitlActive && provider.chatgptWeb?.browserHost === "launcher") {
     // The launcher browser host runs every turn inside a helper process behind an IPC frame whose
-    // `turn` payload is an explicit field whitelist; a live `hilExecGate` object cannot cross it.
+    // `turn` payload is an explicit field whitelist; a live `hitlExecGate` object cannot cross it.
     // Refusing here (rather than silently dropping the gate in launcher-helper-client) keeps the
     // daemon from running turns whose `[EXEC_REQUEST]` block is filtered out of Codex's transcript
     // while the command is never actually proposed or run.
     throw new Error(
-      "ChatGPT HIL requires the managed-chrome browser host; the launcher browser host cannot carry the HIL exec gate",
+      "ChatGPT HITL requires the managed-chrome browser host; the launcher browser host cannot carry the HITL exec gate",
     );
   }
   // One gateway, one queue, for every concurrent turn this adapter runs: the daemon has a single
-  // stdin, and two readline interfaces on it corrupt each other (see src/hil/approval.ts).
-  const hilApprovals = hilActive
-    ? new HilApprovalQueue(dependencies.hilApprovalGateway ?? new TtyApprovalGateway())
+  // stdin, and two readline interfaces on it corrupt each other (see src/hitl/approval.ts).
+  const hitlApprovals = hitlActive
+    ? new HitlApprovalQueue(dependencies.hitlApprovalGateway ?? new TtyApprovalGateway())
     : undefined;
   if (manualInteraction) {
     if (!configuredCapabilities.localToolsEnabled) {
@@ -432,20 +432,20 @@ export function createChatGptWebAdapter(
     const checkpointInput = captureLunaCheckpoint
       ? lunaCheckpointStore.apply(parsed)
       : { parsed, applied: false };
-    // HIL and Luna rolling checkpoints cannot share a turn: the checkpoint stream is created once
-    // per turn inside browser-worker and is not reset on a HIL resume, so its marker latch would
+    // HITL and Luna rolling checkpoints cannot share a turn: the checkpoint stream is created once
+    // per turn inside browser-worker and is not reset on a HITL resume, so its marker latch would
     // swallow round 2's visible text (or trip the "more than one rolling checkpoint marker"
     // consistency error). Luna is the default model whenever Sol is unavailable, so this is a
-    // reachable combination rather than a corner case; HIL yields for the turn.
+    // reachable combination rather than a corner case; HITL yields for the turn.
     // A compaction checkpoint turn is explicitly told not to call tools and only summarizes the
     // supplied context, so it never wants an exec gate (or a blocking approval prompt) either.
-    const hilTurnActive = hilActive
+    const hitlTurnActive = hitlActive
       && !captureLunaCheckpoint
       && !mode.localTools
       && !parsed._compactionRequest;
-    if (hilActive && captureLunaCheckpoint) {
+    if (hitlActive && captureLunaCheckpoint) {
       console.warn(
-        `[chatgpt-web] browser turn ${traceId}: HIL local exec is disabled for this turn because Luna rolling checkpoint capture is active`,
+        `[chatgpt-web] browser turn ${traceId}: HITL local exec is disabled for this turn because Luna rolling checkpoint capture is active`,
       );
     }
     const conversationKey = !parsed._compactionRequest
@@ -472,7 +472,7 @@ export function createChatGptWebAdapter(
         captureLunaCheckpoint,
         // Without this the model is never told the [EXEC_REQUEST] protocol exists, so the gate
         // below could never fire in a real session.
-        ...(hilTurnActive ? { hilProtocol: true } : {}),
+        ...(hitlTurnActive ? { hitlProtocol: true } : {}),
         ...(experimentalMultipartParts !== undefined
           ? { experimentalMultipartParts }
           : {}),
@@ -733,16 +733,16 @@ export function createChatGptWebAdapter(
           captureLunaCheckpoint: true,
           onLunaCheckpoint: captureCheckpoint,
         } : {}),
-        ...(hilTurnActive ? {
-          hilExecGate: createHilExecGate({
-            approvalGateway: hilApprovals!.forTurn(traceId),
-            workspaceCwd: provider.chatgptWeb?.hilWorkspaceCwd ?? process.cwd(),
+        ...(hitlTurnActive ? {
+          hitlExecGate: createHitlExecGate({
+            approvalGateway: hitlApprovals!.forTurn(traceId),
+            workspaceCwd: provider.chatgptWeb?.hitlWorkspaceCwd ?? process.cwd(),
           }),
         } : {}),
       })), browserAbort);
       return {
         mode: "read-only",
-        hilActive: hilTurnActive,
+        hitlActive: hitlTurnActive,
         browser: browserTurn.browser,
         physicalSettlement: browserTurn.physicalSettlement,
         trace,
@@ -1181,36 +1181,36 @@ export function createChatGptWebAdapter(
           session.appendRoundEvents(roundKey, events);
           for (const event of events) emit(event);
         };
-        // When HIL is active for this (browser-only) session, withhold the raw
+        // When HITL is active for this (browser-only) session, withhold the raw
         // `[EXEC_REQUEST]...[/EXEC_REQUEST]` protocol block from the Codex-transcript text_delta
         // stream so it never reaches Codex or the round journal. One filter instance is shared
         // across every batch in the round (rather than recreated per batch) because it buffers
         // partial protocol-block text across `text_delta` boundaries; a fresh instance per batch
         // would lose that buffered state and could leak or duplicate a split protocol block.
-        const hilFilterActive = session.runtime.hilActive === true && session.runtime.mode === "read-only";
+        const hitlFilterActive = session.runtime.hitlActive === true && session.runtime.mode === "read-only";
         let batchSink: (event: AdapterEvent) => void = () => {};
-        const hilRoundFilter = hilFilterActive
-          ? createHilEmitFilter<AdapterEvent>(event => batchSink(event))
+        const hitlRoundFilter = hitlFilterActive
+          ? createHitlEmitFilter<AdapterEvent>(event => batchSink(event))
           : undefined;
         const emitRoundBatch = (
           produce: (buffer: (event: AdapterEvent) => void) => void,
         ): void => {
           const events: AdapterEvent[] = [];
           batchSink = event => events.push(event);
-          const buffer = hilRoundFilter ?? batchSink;
+          const buffer = hitlRoundFilter ?? batchSink;
           produce(buffer);
           emitRoundEvents(events);
         };
         const emitRoundEvent = (event: AdapterEvent): void => {
           // Route single (typically error/terminal) events through the same filter indirection
           // as emitRoundBatch: `event` is never itself a `text_delta`, so passing it through
-          // `hilRoundFilter` (rather than calling `emitRoundEvents([event])` directly, which
+          // `hitlRoundFilter` (rather than calling `emitRoundEvents([event])` directly, which
           // would bypass the filter) flushes any text still buffered from an earlier batch in
           // this round before appending `event`, so a round that ends here never silently drops
           // buffered tail text.
           const events: AdapterEvent[] = [];
           batchSink = pending => events.push(pending);
-          const buffer = hilRoundFilter ?? batchSink;
+          const buffer = hitlRoundFilter ?? batchSink;
           buffer(event);
           emitRoundEvents(events);
         };
@@ -1250,13 +1250,13 @@ export function createChatGptWebAdapter(
                   emitRoundBatch(buffer => emitTextDeltas(completedTextDeltas, buffer));
                 }
               }
-              // A HIL resume round resets the browser worker's own markdown buffer, so its
+              // A HITL resume round resets the browser worker's own markdown buffer, so its
               // resolved answer reflects only the last round while `session.runtime.text`
               // accumulates every round's onTextDelta pushes (including the withheld
               // EXEC_REQUEST round(s)). Require only that the cumulative feed ends with the
-              // last round's answer rather than exactly equalling it; non-HIL sessions keep the
+              // last round's answer rather than exactly equalling it; non-HITL sessions keep the
               // strict equality check.
-              const reproducedFinalAnswer = hilFilterActive
+              const reproducedFinalAnswer = hitlFilterActive
                 ? session.runtime.text.value().endsWith(settled.answer)
                 : session.runtime.text.value() === settled.answer;
               if (!reproducedFinalAnswer) {
@@ -1368,10 +1368,10 @@ export function createChatGptWebAdapter(
                 session.setFinalEvents(session.roundEvents(roundKey));
                 if (turnToken) await broker.revoke(turnToken);
                 if (completedOutcome.type === "error") throw completedOutcome.error;
-                // See the matching comment on the initial-settled fast path above: a HIL resume
+                // See the matching comment on the initial-settled fast path above: a HITL resume
                 // round resets the browser worker's markdown buffer, so `completedOutcome.answer`
                 // reflects only the last round while the cumulative feed carries every round.
-                const reproducedFinalAnswer = hilFilterActive
+                const reproducedFinalAnswer = hitlFilterActive
                   ? session.runtime.text.value().endsWith(completedOutcome.answer)
                   : session.runtime.text.value() === completedOutcome.answer;
                 if (!reproducedFinalAnswer) {

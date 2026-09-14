@@ -151,10 +151,10 @@ interface ChatGptTurnRuntimeBase {
   /** Idempotently retire the turn-bound MCP capability after browser and observer settlement. */
   retireCapability?: () => void | Promise<void>;
   submission?: { phase: "prepared" | "send_activated" | "accepted" };
-  /** True only when this turn actually carries a HIL exec gate, so the Codex-transcript emit
-   * filter engages exactly when the gate does (a turn that declines HIL -- e.g. Luna rolling
+  /** True only when this turn actually carries a HITL exec gate, so the Codex-transcript emit
+   * filter engages exactly when the gate does (a turn that declines HITL -- e.g. Luna rolling
    * checkpoint capture -- must not have its text withheld). */
-  hilActive?: boolean;
+  hitlActive?: boolean;
   /** Present only when the visible ChatGPT tab is driven manually through the Codex Zero Risk MCP contract. */
   manualControl?: { surfaceNonce: string };
   cancel: (reason?: Error) => void;

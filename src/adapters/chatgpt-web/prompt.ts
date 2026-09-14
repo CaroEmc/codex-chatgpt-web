@@ -14,7 +14,7 @@ import {
   CHATGPT_LUNA_CHECKPOINT_MARKER,
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
 } from "./rolling-checkpoint";
-import { DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS } from "../../hil/protocol";
+import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS } from "../../hitl/protocol";
 
 export interface ChatGptWebPromptImage {
   ref: string;
@@ -34,9 +34,9 @@ export interface CompiledChatGptWebPrompt {
 export interface CompileChatGptWebPromptOptions {
   captureLunaCheckpoint?: boolean;
   /** Teaches the model the human-in-the-loop `[EXEC_REQUEST]`/`[EXEC_RESULT]` local-exec protocol
-   * that `hilExecGate` intercepts (browser-only `--hil` sessions only). Without it the gate can
+   * that `hitlExecGate` intercepts (browser-only `--hitl` sessions only). Without it the gate can
    * never fire, because the model was never told to emit the block. */
-  hilProtocol?: boolean;
+  hitlProtocol?: boolean;
   experimentalMultipartParts?: ChatGptWebMultipartPartCount;
   /**
    * Manual Zero Risk transport keeps ChatGPT model/effort selection and prompt submission under the
@@ -435,7 +435,7 @@ export function compileChatGptWebPrompt(
     ? { localTools: true, effort: "low" as const, displayLabel: "Zero Risk" as const }
     : resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   const captureLunaCheckpoint = options?.captureLunaCheckpoint === true;
-  const hilProtocol = options?.hilProtocol === true;
+  const hitlProtocol = options?.hitlProtocol === true;
   const multipartParts = options?.experimentalMultipartParts;
   const multipartEnabled = multipartParts !== undefined;
   if (manualControl) {
@@ -446,11 +446,11 @@ export function compileChatGptWebPrompt(
       throw new Error("ChatGPT Zero Risk does not support rolling or multipart browser transport");
     }
   }
-  if (hilProtocol && (captureLunaCheckpoint || manualControl || mode.localTools)) {
-    // Mirrors the activation invariant in index.ts: HIL runs only on a read-only browser turn that
+  if (hitlProtocol && (captureLunaCheckpoint || manualControl || mode.localTools)) {
+    // Mirrors the activation invariant in index.ts: HITL runs only on a read-only browser turn that
     // is not also capturing a Luna rolling checkpoint (the checkpoint stream is not reset across a
-    // HIL resume round) and is not manually driven.
-    throw new Error("HIL local exec is supported only for read-only browser turns without rolling checkpoints");
+    // HITL resume round) and is not manually driven.
+    throw new Error("HITL local exec is supported only for read-only browser turns without rolling checkpoints");
   }
   if (multipartParts !== undefined && multipartParts !== 2 && multipartParts !== CHATGPT_BIGGER_CONTEXT_PARTS) {
     throw new Error("Bigger Context requires two or three multipart stages");
@@ -554,8 +554,8 @@ export function compileChatGptWebPrompt(
       "The outer bridge removes this marker and checkpoint from the user-facing stream. Never refer to the checkpoint in the visible answer.",
     ]
     : [];
-  const hilProtocolContract = hilProtocol
-    ? [DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS]
+  const hitlProtocolContract = hitlProtocol
+    ? [DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS]
     : [];
   const manualControlContract = manualControl
     ? [
@@ -624,7 +624,7 @@ export function compileChatGptWebPrompt(
           ...transportContract,
           ...outputControlContract,
           ...manualControlContract,
-          ...hilProtocolContract,
+          ...hitlProtocolContract,
           ...checkpointContract,
           answerContract,
           ...transportResume,
@@ -661,7 +661,7 @@ export function compileChatGptWebPrompt(
       ...transportContract,
       ...outputControlContract,
       ...manualControlContract,
-      ...hilProtocolContract,
+      ...hitlProtocolContract,
       ...checkpointContract,
       answerContract,
       "<codex_context_json>",

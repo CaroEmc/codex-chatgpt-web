@@ -1,4 +1,4 @@
-# HIL Production Daemon Integration Implementation Plan
+# HITL Production Daemon Integration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -9,7 +9,7 @@ for TTY approval, run the approved command locally, and continue the same
 turn — without touching `full` mode, the MCP connector, the OpenAI Tunnel,
 `src/bridge.ts`, or the daemon's round/session journaling.
 
-**Architecture:** A new `hilExecGate` hook inside `runBrowserTurn`'s own
+**Architecture:** A new `hitlExecGate` hook inside `runBrowserTurn`'s own
 completion-detection loop (`src/adapters/chatgpt-web/browser-worker.ts`)
 intercepts the turn-finalization decision: on a well-formed `[EXEC_REQUEST]`,
 it runs the (moved-but-unchanged) approval/exec pipeline from the dev-chat
@@ -21,70 +21,70 @@ keeps the raw protocol block out of Codex's own transcript.
 
 **Tech Stack:** TypeScript, Bun test runner, Playwright (via existing
 `browser-worker.ts` automation), Node `child_process`/`readline` (via the
-existing `src/hil/*` modules).
+existing `src/hitl/*` modules).
 
-**Spec:** `docs/superpowers/specs/2026-09-13-hil-daemon-integration-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-13-hitl-daemon-integration-design.md`
 (read this too — it explains *why* the mechanism is shaped this way,
 including a rejected cross-invocation approach in its §2).
 
 ## Global Constraints
 
-- HIL is honored only when **both** `config.mode === "browser-only"` and
+- HITL is honored only when **both** `config.mode === "browser-only"` and
   `process.stdin.isTTY` is true at daemon startup; otherwise the daemon logs
-  a warning and runs with HIL disabled for the whole process (spec §3).
+  a warning and runs with HITL disabled for the whole process (spec §3).
 - `full` mode, the MCP connector, the OpenAI Tunnel, `src/bridge.ts`, and the
   daemon's round/session journaling (`src/adapters/chatgpt-web/turn-execution.ts`)
   are **never** touched by any task in this plan (spec §10).
 - Execution mechanics are unchanged from the dev-chat prototype: 60s
   `child_process.spawn` timeout, 10KB combined stdout+stderr truncation,
   cwd resolved against the workspace root with pre-approval rejection for any
-  path that escapes it (`src/hil/exec.ts`, moved verbatim in Task 1).
-- When `hilExecGate`/the emit filter are not engaged (the default for every
+  path that escapes it (`src/hitl/exec.ts`, moved verbatim in Task 1).
+- When `hitlExecGate`/the emit filter are not engaged (the default for every
   existing daemon session — all of `full` mode, and any `browser-only` turn
-  without `--hil`), behavior must be byte-for-byte unchanged from today. Every
+  without `--hitl`), behavior must be byte-for-byte unchanged from today. Every
   task that touches shared code (`browser-worker.ts`, `index.ts`) must keep
-  its new branch behind an `if (turn.hilExecGate)` / `if (config.hilEnabled)`
+  its new branch behind an `if (turn.hitlExecGate)` / `if (config.hitlEnabled)`
   check with no other code path altered.
-- No new abstraction beyond what's specified below — reuse `src/hil/*`
+- No new abstraction beyond what's specified below — reuse `src/hitl/*`
   unchanged; do not re-implement parsing/approval/exec logic anywhere else.
 
 ---
 
-### Task 1: Move shared HIL modules to `src/hil/`
+### Task 1: Move shared HITL modules to `src/hitl/`
 
 **Files:**
-- Create: `src/hil/protocol.ts` (moved from `src/dev-chat/hil-protocol.ts`, byte-identical)
-- Create: `src/hil/approval.ts` (moved from `src/dev-chat/hil-approval.ts`, byte-identical)
-- Create: `src/hil/exec.ts` (moved from `src/dev-chat/hil-exec.ts`, byte-identical)
-- Modify: `src/dev-chat/hil-protocol.ts` (replace body with a re-export)
-- Modify: `src/dev-chat/hil-approval.ts` (replace body with a re-export)
-- Modify: `src/dev-chat/hil-exec.ts` (replace body with a re-export)
-- Test: `tests/hil-protocol.test.ts` (moved from `tests/hil-protocol.test.ts`'s current import path — update the import)
-- Test: `tests/hil-approval.test.ts` (update the import)
-- Test: `tests/hil-exec.test.ts` (update the import)
+- Create: `src/hitl/protocol.ts` (moved from `src/dev-chat/hitl-protocol.ts`, byte-identical)
+- Create: `src/hitl/approval.ts` (moved from `src/dev-chat/hitl-approval.ts`, byte-identical)
+- Create: `src/hitl/exec.ts` (moved from `src/dev-chat/hitl-exec.ts`, byte-identical)
+- Modify: `src/dev-chat/hitl-protocol.ts` (replace body with a re-export)
+- Modify: `src/dev-chat/hitl-approval.ts` (replace body with a re-export)
+- Modify: `src/dev-chat/hitl-exec.ts` (replace body with a re-export)
+- Test: `tests/hitl-protocol.test.ts` (moved from `tests/hitl-protocol.test.ts`'s current import path — update the import)
+- Test: `tests/hitl-approval.test.ts` (update the import)
+- Test: `tests/hitl-exec.test.ts` (update the import)
 
 **Interfaces:**
-- Produces (for every later task): `src/hil/protocol.ts` exports
+- Produces (for every later task): `src/hitl/protocol.ts` exports
   `parseExecRequest(text: string): ParsedExecRequest | undefined`,
   `formatExecResult(exitCode: number, output: string): string`,
-  `EXEC_REJECTED_TEXT: string`, `DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS: string`,
+  `EXEC_REJECTED_TEXT: string`, `DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS: string`,
   and the `ParsedExecRequest` interface (`{ command: string; cwd?: string; reason?: string }`).
-  `src/hil/approval.ts` exports `ApprovalGateway`, `ExecProposal`,
-  `ApprovalDecision`, `TtyApprovalGateway`. `src/hil/exec.ts` exports
+  `src/hitl/approval.ts` exports `ApprovalGateway`, `ExecProposal`,
+  `ApprovalDecision`, `TtyApprovalGateway`. `src/hitl/exec.ts` exports
   `runApprovedCommand(gateway: ApprovalGateway, request: RawExecRequest, workspaceCwd: string): Promise<string>`
   and `RawExecRequest`.
 
-- [ ] **Step 1: Copy the three modules verbatim into `src/hil/`**
+- [ ] **Step 1: Copy the three modules verbatim into `src/hitl/`**
 
-Read each of `src/dev-chat/hil-protocol.ts`, `src/dev-chat/hil-approval.ts`,
-`src/dev-chat/hil-exec.ts` and write identical copies to `src/hil/protocol.ts`,
-`src/hil/approval.ts`, `src/hil/exec.ts` respectively — same code, same
-exports. The only edit needed is `src/hil/exec.ts`'s import line, which
+Read each of `src/dev-chat/hitl-protocol.ts`, `src/dev-chat/hitl-approval.ts`,
+`src/dev-chat/hitl-exec.ts` and write identical copies to `src/hitl/protocol.ts`,
+`src/hitl/approval.ts`, `src/hitl/exec.ts` respectively — same code, same
+exports. The only edit needed is `src/hitl/exec.ts`'s import line, which
 currently reads:
 
 ```ts
-import type { ApprovalGateway } from "./hil-approval";
-import { EXEC_REJECTED_TEXT, formatExecResult } from "./hil-protocol";
+import type { ApprovalGateway } from "./hitl-approval";
+import { EXEC_REJECTED_TEXT, formatExecResult } from "./hitl-protocol";
 ```
 
 Change to:
@@ -94,38 +94,38 @@ import type { ApprovalGateway } from "./approval";
 import { EXEC_REJECTED_TEXT, formatExecResult } from "./protocol";
 ```
 
-- [ ] **Step 2: Replace the three `src/dev-chat/hil-*.ts` files with re-exports**
+- [ ] **Step 2: Replace the three `src/dev-chat/hitl-*.ts` files with re-exports**
 
-`src/dev-chat/hil-protocol.ts` becomes:
-
-```ts
-export * from "../hil/protocol";
-```
-
-`src/dev-chat/hil-approval.ts` becomes:
+`src/dev-chat/hitl-protocol.ts` becomes:
 
 ```ts
-export * from "../hil/approval";
+export * from "../hitl/protocol";
 ```
 
-`src/dev-chat/hil-exec.ts` becomes:
+`src/dev-chat/hitl-approval.ts` becomes:
 
 ```ts
-export * from "../hil/exec";
+export * from "../hitl/approval";
 ```
 
-- [ ] **Step 3: Update the three existing HIL test files' imports**
+`src/dev-chat/hitl-exec.ts` becomes:
 
-In `tests/hil-protocol.test.ts`, change the import from
-`"../src/dev-chat/hil-protocol"` to `"../src/hil/protocol"`. Do the same for
-`tests/hil-approval.test.ts` (→ `"../src/hil/approval"`) and
-`tests/hil-exec.test.ts` (→ `"../src/hil/exec"`). Do not change any test
+```ts
+export * from "../hitl/exec";
+```
+
+- [ ] **Step 3: Update the three existing HITL test files' imports**
+
+In `tests/hitl-protocol.test.ts`, change the import from
+`"../src/dev-chat/hitl-protocol"` to `"../src/hitl/protocol"`. Do the same for
+`tests/hitl-approval.test.ts` (→ `"../src/hitl/approval"`) and
+`tests/hitl-exec.test.ts` (→ `"../src/hitl/exec"`). Do not change any test
 body — these tests already cover the moved code fully; the move alone
 doesn't need new tests.
 
-- [ ] **Step 4: Run the full existing HIL and dev-chat test suites**
+- [ ] **Step 4: Run the full existing HITL and dev-chat test suites**
 
-Run: `bun test tests/hil-protocol.test.ts tests/hil-approval.test.ts tests/hil-exec.test.ts tests/dev-chat.test.ts`
+Run: `bun test tests/hitl-protocol.test.ts tests/hitl-approval.test.ts tests/hitl-exec.test.ts tests/dev-chat.test.ts`
 Expected: all pass, identical results to before the move (confirms the
 re-export preserves dev-chat's behavior and the moved tests still cover the
 same code).
@@ -133,64 +133,64 @@ same code).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hil/ src/dev-chat/hil-protocol.ts src/dev-chat/hil-approval.ts src/dev-chat/hil-exec.ts tests/hil-protocol.test.ts tests/hil-approval.test.ts tests/hil-exec.test.ts
-git commit -m "refactor: move HIL protocol/approval/exec modules to src/hil/"
+git add src/hitl/ src/dev-chat/hitl-protocol.ts src/dev-chat/hitl-approval.ts src/dev-chat/hitl-exec.ts tests/hitl-protocol.test.ts tests/hitl-approval.test.ts tests/hitl-exec.test.ts
+git commit -m "refactor: move HITL protocol/approval/exec modules to src/hitl/"
 ```
 
 ---
 
-### Task 2: `hilEnabled` config field and activation gating
+### Task 2: `hitlEnabled` config field and activation gating
 
 **Files:**
-- Modify: `src/config.ts` — add `hilEnabled: boolean` to `AppConfig`
+- Modify: `src/config.ts` — add `hitlEnabled: boolean` to `AppConfig`
   (alongside `mode: RuntimeMode` at `src/config.ts:65-96`), and add a new
   exported helper.
-- Test: `tests/config-hil.test.ts` (new)
+- Test: `tests/config-hitl.test.ts` (new)
 
 **Interfaces:**
 - Consumes: nothing new from earlier tasks.
-- Produces: `AppConfig.hilEnabled: boolean` field; a new exported function
-  `resolveHilActivation(requested: boolean, mode: RuntimeMode, stdinIsTty: boolean): { enabled: boolean; warning?: string }`
-  that later tasks (3, 6) call to decide daemon-wide HIL activation and to
+- Produces: `AppConfig.hitlEnabled: boolean` field; a new exported function
+  `resolveHitlActivation(requested: boolean, mode: RuntimeMode, stdinIsTty: boolean): { enabled: boolean; warning?: string }`
+  that later tasks (3, 6) call to decide daemon-wide HITL activation and to
   get the exact warning text to log when activation is refused.
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 import { expect, test } from "bun:test";
-import { resolveHilActivation } from "../src/config";
+import { resolveHitlActivation } from "../src/config";
 
-test("resolveHilActivation enables HIL only for browser-only mode with an attached TTY", () => {
-  expect(resolveHilActivation(true, "browser-only", true)).toEqual({ enabled: true });
+test("resolveHitlActivation enables HITL only for browser-only mode with an attached TTY", () => {
+  expect(resolveHitlActivation(true, "browser-only", true)).toEqual({ enabled: true });
 });
 
-test("resolveHilActivation refuses full mode even if a TTY is attached", () => {
-  const result = resolveHilActivation(true, "full", true);
+test("resolveHitlActivation refuses full mode even if a TTY is attached", () => {
+  const result = resolveHitlActivation(true, "full", true);
   expect(result.enabled).toBe(false);
   expect(result.warning).toBe(
-    "HIL requires browser-only mode; the daemon is running in full mode. HIL is disabled for this process.",
+    "HITL requires browser-only mode; the daemon is running in full mode. HITL is disabled for this process.",
   );
 });
 
-test("resolveHilActivation refuses a headless daemon even in browser-only mode", () => {
-  const result = resolveHilActivation(true, "browser-only", false);
+test("resolveHitlActivation refuses a headless daemon even in browser-only mode", () => {
+  const result = resolveHitlActivation(true, "browser-only", false);
   expect(result.enabled).toBe(false);
   expect(result.warning).toBe(
-    "HIL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HIL is disabled for this process.",
+    "HITL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HITL is disabled for this process.",
   );
 });
 
-test("resolveHilActivation is inert when HIL was not requested", () => {
-  expect(resolveHilActivation(false, "browser-only", true)).toEqual({ enabled: false });
+test("resolveHitlActivation is inert when HITL was not requested", () => {
+  expect(resolveHitlActivation(false, "browser-only", true)).toEqual({ enabled: false });
 });
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `bun test tests/config-hil.test.ts`
-Expected: FAIL — `resolveHilActivation is not a function` (or import error).
+Run: `bun test tests/config-hitl.test.ts`
+Expected: FAIL — `resolveHitlActivation is not a function` (or import error).
 
-- [ ] **Step 3: Add `hilEnabled` to `AppConfig` and implement `resolveHilActivation`**
+- [ ] **Step 3: Add `hitlEnabled` to `AppConfig` and implement `resolveHitlActivation`**
 
 In `src/config.ts`, add the field to the `AppConfig` interface right after
 `mode: RuntimeMode;` (`src/config.ts:69`):
@@ -201,11 +201,11 @@ export interface AppConfig {
   purpose?: "dev-harness";
   releaseVersion: string;
   mode: RuntimeMode;
-  hilEnabled: boolean;
+  hitlEnabled: boolean;
   // ...unchanged fields below...
 ```
 
-Add `hilEnabled: false` to `defaultConfig`'s returned object (wherever the
+Add `hitlEnabled: false` to `defaultConfig`'s returned object (wherever the
 function at `src/config.ts:193` constructs its default `AppConfig` literal —
 add the field alongside `mode`, defaulting to `false`).
 
@@ -213,7 +213,7 @@ Add the new exported function, near `tunnelConfigForInteractionMode`
 (`src/config.ts:99-108`):
 
 ```ts
-export function resolveHilActivation(
+export function resolveHitlActivation(
   requested: boolean,
   mode: RuntimeMode,
   stdinIsTty: boolean,
@@ -222,13 +222,13 @@ export function resolveHilActivation(
   if (mode !== "browser-only") {
     return {
       enabled: false,
-      warning: "HIL requires browser-only mode; the daemon is running in full mode. HIL is disabled for this process.",
+      warning: "HITL requires browser-only mode; the daemon is running in full mode. HITL is disabled for this process.",
     };
   }
   if (!stdinIsTty) {
     return {
       enabled: false,
-      warning: "HIL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HIL is disabled for this process.",
+      warning: "HITL requires an attached terminal (process.stdin.isTTY); this daemon process is headless. HITL is disabled for this process.",
     };
   }
   return { enabled: true };
@@ -237,32 +237,32 @@ export function resolveHilActivation(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `bun test tests/config-hil.test.ts`
+Run: `bun test tests/config-hitl.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/config.ts tests/config-hil.test.ts
-git commit -m "feat: add hilEnabled config field and resolveHilActivation gate"
+git add src/config.ts tests/config-hitl.test.ts
+git commit -m "feat: add hitlEnabled config field and resolveHitlActivation gate"
 ```
 
 ---
 
-### Task 3: `--hil` startup flag in `src/cli.ts`/`src/server.ts`
+### Task 3: `--hitl` startup flag in `src/cli.ts`/`src/server.ts`
 
 **Files:**
-- Modify: `src/cli.ts` — add `--hil` flag parsing next to the existing
+- Modify: `src/cli.ts` — add `--hitl` flag parsing next to the existing
   `--browser-only`/`--full` flags (`src/cli.ts:263-265`), help text update.
-- Modify: `src/server.ts` — apply `resolveHilActivation` when starting the
-  daemon and set `config.hilEnabled` accordingly, logging the warning if
+- Modify: `src/server.ts` — apply `resolveHitlActivation` when starting the
+  daemon and set `config.hitlEnabled` accordingly, logging the warning if
   refused.
-- Test: `tests/cli-hil-flag.test.ts` (new)
+- Test: `tests/cli-hitl-flag.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `resolveHilActivation` from Task 2 (`src/config.ts`).
+- Consumes: `resolveHitlActivation` from Task 2 (`src/config.ts`).
 - Produces: nothing new consumed by later tasks — this task only wires
-  startup plumbing. Later tasks read `config.hilEnabled` directly.
+  startup plumbing. Later tasks read `config.hitlEnabled` directly.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -279,26 +279,26 @@ import { expect, test } from "bun:test";
 // Replace `F` with the actual exported name found in src/cli.ts.
 import { F } from "../src/cli";
 
-test("--hil combined with --full is rejected with a clear error", () => {
-  expect(() => F(["--full", "--hil"])).toThrow(/--hil requires --browser-only/);
+test("--hitl combined with --full is rejected with a clear error", () => {
+  expect(() => F(["--full", "--hitl"])).toThrow(/--hitl requires --browser-only/);
 });
 
-test("--hil alone with --browser-only is accepted", () => {
-  const result = F(["--browser-only", "--hil"]);
-  expect(result.hil).toBe(true);
+test("--hitl alone with --browser-only is accepted", () => {
+  const result = F(["--browser-only", "--hitl"]);
+  expect(result.hitl).toBe(true);
 });
 ```
 
 Adjust the exact assertions once you've read `F`'s real return shape — the
-binding requirement is: **`--hil` combined with `--full` throws an error
-containing `"--hil requires --browser-only"`**, and `--hil` alone with
-`--browser-only` produces a truthy `hil`/`hilRequested` flag in whatever
+binding requirement is: **`--hitl` combined with `--full` throws an error
+containing `"--hitl requires --browser-only"`**, and `--hitl` alone with
+`--browser-only` produces a truthy `hitl`/`hitlRequested` flag in whatever
 options object `F` already returns for `browserOnly`/`full`.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `bun test tests/cli-hil-flag.test.ts`
-Expected: FAIL (flag not recognized / no `hil` field on the result / no throw).
+Run: `bun test tests/cli-hitl-flag.test.ts`
+Expected: FAIL (flag not recognized / no `hitl` field on the result / no throw).
 
 - [ ] **Step 3: Add the flag**
 
@@ -306,19 +306,19 @@ In `src/cli.ts`, next to `const browserOnly = takeFlag(args, "--browser-only");`
 and `const full = takeFlag(args, "--full");` (`src/cli.ts:263-264`), add:
 
 ```ts
-const hil = takeFlag(args, "--hil");
-if (hil && full) {
-  throw new Error("--hil requires --browser-only (full mode already has real tool calls)");
+const hitl = takeFlag(args, "--hitl");
+if (hitl && full) {
+  throw new Error("--hitl requires --browser-only (full mode already has real tool calls)");
 }
 ```
 
-Add `hil` to whatever options object this function returns (matching the
+Add `hitl` to whatever options object this function returns (matching the
 existing pattern for `browserOnly`/`full` in the same object literal).
 Update the CLI help text (find the usage block containing `--browser-only`
-and `--full`, e.g. near `src/cli.ts:49`, and add a line: `--hil   Enable
+and `--full`, e.g. near `src/cli.ts:49`, and add a line: `--hitl   Enable
 human-in-the-loop local exec (browser-only mode, foreground only)`).
 
-- [ ] **Step 4: Wire `resolveHilActivation` into `src/server.ts`'s startup path**
+- [ ] **Step 4: Wire `resolveHitlActivation` into `src/server.ts`'s startup path**
 
 Find where `src/server.ts` reads the parsed CLI options and constructs or
 updates the persisted `AppConfig` before starting to listen (grep for where
@@ -326,71 +326,71 @@ updates the persisted `AppConfig` before starting to listen (grep for where
 set, add:
 
 ```ts
-import { resolveHilActivation } from "./config";
+import { resolveHitlActivation } from "./config";
 // ...
-const hilActivation = resolveHilActivation(options.hil === true, config.mode, process.stdin.isTTY === true);
-config.hilEnabled = hilActivation.enabled;
-if (hilActivation.warning) console.warn(`[server] ${hilActivation.warning}`);
+const hitlActivation = resolveHitlActivation(options.hitl === true, config.mode, process.stdin.isTTY === true);
+config.hitlEnabled = hitlActivation.enabled;
+if (hitlActivation.warning) console.warn(`[server] ${hitlActivation.warning}`);
 ```
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `bun test tests/cli-hil-flag.test.ts`
+Run: `bun test tests/cli-hitl-flag.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Run the existing CLI/server test suites for regressions**
 
 Run: `bun test tests/server-lifecycle.test.ts`
-Expected: all pass, unchanged (no test in that suite sets `--hil`, so this
+Expected: all pass, unchanged (no test in that suite sets `--hitl`, so this
 confirms the new code path is inert for every existing scenario).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/cli.ts src/server.ts tests/cli-hil-flag.test.ts
-git commit -m "feat: add --hil startup flag with browser-only+TTY gating"
+git add src/cli.ts src/server.ts tests/cli-hitl-flag.test.ts
+git commit -m "feat: add --hitl startup flag with browser-only+TTY gating"
 ```
 
 ---
 
-### Task 4: `hil-interceptor.ts` — the exec gate and the emit filter
+### Task 4: `hitl-interceptor.ts` — the exec gate and the emit filter
 
 **Files:**
-- Create: `src/adapters/chatgpt-web/hil-interceptor.ts`
-- Test: `tests/hil-interceptor.test.ts` (new)
+- Create: `src/adapters/chatgpt-web/hitl-interceptor.ts`
+- Test: `tests/hitl-interceptor.test.ts` (new)
 
 **Interfaces:**
 - Consumes: `ApprovalGateway`, `runApprovedCommand`, `RawExecRequest` from
-  `src/hil/exec.ts`; `parseExecRequest` from `src/hil/protocol.ts` (all from
+  `src/hitl/exec.ts`; `parseExecRequest` from `src/hitl/protocol.ts` (all from
   Task 1).
 - Produces (for Tasks 5 and 6):
-  - `createHilExecGate(deps: { approvalGateway: ApprovalGateway; workspaceCwd: string; runCommand?: typeof runApprovedCommand }): HilExecGate`
-    where `HilExecGate = { check(finalText: string): Promise<{ action: "finalize" } | { action: "resume"; followUpText: string }> }`.
-  - `createHilEmitFilter<TEvent extends { type: string; text?: string }>(realEmit: (event: TEvent) => void): (event: TEvent) => void`
+  - `createHitlExecGate(deps: { approvalGateway: ApprovalGateway; workspaceCwd: string; runCommand?: typeof runApprovedCommand }): HitlExecGate`
+    where `HitlExecGate = { check(finalText: string): Promise<{ action: "finalize" } | { action: "resume"; followUpText: string }> }`.
+  - `createHitlEmitFilter<TEvent extends { type: string; text?: string }>(realEmit: (event: TEvent) => void): (event: TEvent) => void`
     — see exact behavior in Step 3 below; Task 6 wires this in front of the
     adapter's `emit` calls for `text_delta` events specifically.
 
-- [ ] **Step 1: Write the failing tests for `createHilExecGate`**
+- [ ] **Step 1: Write the failing tests for `createHitlExecGate`**
 
 ```ts
 import { expect, test } from "bun:test";
-import { createHilExecGate } from "../src/adapters/chatgpt-web/hil-interceptor";
-import type { ApprovalGateway, ApprovalDecision } from "../src/hil/approval";
+import { createHitlExecGate } from "../src/adapters/chatgpt-web/hitl-interceptor";
+import type { ApprovalGateway, ApprovalDecision } from "../src/hitl/approval";
 
 function fakeGateway(decision: ApprovalDecision): ApprovalGateway {
   return { request: async () => decision };
 }
 
-test("createHilExecGate finalizes when there is no EXEC_REQUEST block", async () => {
-  const gate = createHilExecGate({
+test("createHitlExecGate finalizes when there is no EXEC_REQUEST block", async () => {
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "reject" }),
     workspaceCwd: "/workspace",
   });
   expect(await gate.check("Just a normal final answer.")).toEqual({ action: "finalize" });
 });
 
-test("createHilExecGate resumes with the formatted EXEC_RESULT after an approved run", async () => {
-  const gate = createHilExecGate({
+test("createHitlExecGate resumes with the formatted EXEC_RESULT after an approved run", async () => {
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "run", command: "echo hi" }),
     workspaceCwd: "/workspace",
     runCommand: async (_gateway, request, workspaceCwd) => {
@@ -406,8 +406,8 @@ test("createHilExecGate resumes with the formatted EXEC_RESULT after an approved
   });
 });
 
-test("createHilExecGate resumes with the rejection text when the gateway rejects", async () => {
-  const gate = createHilExecGate({
+test("createHitlExecGate resumes with the rejection text when the gateway rejects", async () => {
+  const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "reject" }),
     workspaceCwd: "/workspace",
   });
@@ -421,31 +421,31 @@ test("createHilExecGate resumes with the rejection text when the gateway rejects
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `bun test tests/hil-interceptor.test.ts`
+Run: `bun test tests/hitl-interceptor.test.ts`
 Expected: FAIL — module does not exist yet.
 
-- [ ] **Step 3: Write `createHilExecGate` and `createHilEmitFilter`**
+- [ ] **Step 3: Write `createHitlExecGate` and `createHitlEmitFilter`**
 
 ```ts
-import { parseExecRequest } from "../../hil/protocol";
-import { runApprovedCommand, type RawExecRequest } from "../../hil/exec";
-import type { ApprovalGateway } from "../../hil/approval";
+import { parseExecRequest } from "../../hitl/protocol";
+import { runApprovedCommand, type RawExecRequest } from "../../hitl/exec";
+import type { ApprovalGateway } from "../../hitl/approval";
 
-export interface HilExecGate {
+export interface HitlExecGate {
   check(finalText: string): Promise<
     | { action: "finalize" }
     | { action: "resume"; followUpText: string }
   >;
 }
 
-export interface HilExecGateDeps {
+export interface HitlExecGateDeps {
   approvalGateway: ApprovalGateway;
   workspaceCwd: string;
-  /** Injected for testability; defaults to the real src/hil/exec.ts implementation. */
+  /** Injected for testability; defaults to the real src/hitl/exec.ts implementation. */
   runCommand?: (gateway: ApprovalGateway, request: RawExecRequest, workspaceCwd: string) => Promise<string>;
 }
 
-export function createHilExecGate(deps: HilExecGateDeps): HilExecGate {
+export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
   const runCommand = deps.runCommand ?? runApprovedCommand;
   return {
     async check(finalText) {
@@ -465,7 +465,7 @@ export function createHilExecGate(deps: HilExecGateDeps): HilExecGate {
  * (parseExecRequest succeeds) — the exec gate handles the block itself via
  * `check()`, so Codex never needs to see it.
  */
-export function createHilEmitFilter<TEvent extends { type: string; text?: string }>(
+export function createHitlEmitFilter<TEvent extends { type: string; text?: string }>(
   realEmit: (event: TEvent) => void,
 ): (event: TEvent) => void {
   let buffered = "";
@@ -505,19 +505,19 @@ export function createHilEmitFilter<TEvent extends { type: string; text?: string
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `bun test tests/hil-interceptor.test.ts`
-Expected: PASS (3 tests for `createHilExecGate`).
+Run: `bun test tests/hitl-interceptor.test.ts`
+Expected: PASS (3 tests for `createHitlExecGate`).
 
-- [ ] **Step 5: Add failing tests for `createHilEmitFilter`, then make them pass**
+- [ ] **Step 5: Add failing tests for `createHitlEmitFilter`, then make them pass**
 
-Append to `tests/hil-interceptor.test.ts`:
+Append to `tests/hitl-interceptor.test.ts`:
 
 ```ts
-import { createHilEmitFilter } from "../src/adapters/chatgpt-web/hil-interceptor";
+import { createHitlEmitFilter } from "../src/adapters/chatgpt-web/hitl-interceptor";
 
-test("createHilEmitFilter passes ordinary text straight through", () => {
+test("createHitlEmitFilter passes ordinary text straight through", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "hello " });
   filtered({ type: "text_delta", text: "world" });
   expect(seen).toEqual([
@@ -526,25 +526,25 @@ test("createHilEmitFilter passes ordinary text straight through", () => {
   ]);
 });
 
-test("createHilEmitFilter withholds a completed EXEC_REQUEST block entirely", () => {
+test("createHitlEmitFilter withholds a completed EXEC_REQUEST block entirely", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "[EXEC_REQUEST]\n" });
   filtered({ type: "text_delta", text: "command: ls\n[/EXEC_REQUEST]" });
   filtered({ type: "done" });
   expect(seen).toEqual([{ type: "done" }]);
 });
 
-test("createHilEmitFilter flushes verbatim when a [-prefixed delta turns out not to match", () => {
+test("createHitlEmitFilter flushes verbatim when a [-prefixed delta turns out not to match", () => {
   const seen: unknown[] = [];
-  const filtered = createHilEmitFilter(event => seen.push(event));
+  const filtered = createHitlEmitFilter(event => seen.push(event));
   filtered({ type: "text_delta", text: "[not a protocol block]" });
   expect(seen).toEqual([{ type: "text_delta", text: "[not a protocol block]" }]);
 });
 ```
 
-Run: `bun test tests/hil-interceptor.test.ts`
-Expected: PASS (6 tests total). If any fail, adjust `createHilEmitFilter`'s
+Run: `bun test tests/hitl-interceptor.test.ts`
+Expected: PASS (6 tests total). If any fail, adjust `createHitlEmitFilter`'s
 buffering logic (not the tests) until the three behaviors above hold —
 the exact buffering algorithm above is a reference implementation, not a
 frozen contract; the binding requirement is the three test outcomes.
@@ -552,13 +552,13 @@ frozen contract; the binding requirement is the three test outcomes.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/adapters/chatgpt-web/hil-interceptor.ts tests/hil-interceptor.test.ts
-git commit -m "feat: add HIL exec gate and Codex-transcript emit filter"
+git add src/adapters/chatgpt-web/hitl-interceptor.ts tests/hitl-interceptor.test.ts
+git commit -m "feat: add HITL exec gate and Codex-transcript emit filter"
 ```
 
 ---
 
-### Task 5: `hilExecGate` hook in `browser-worker.ts`
+### Task 5: `hitlExecGate` hook in `browser-worker.ts`
 
 This is the highest-risk task in this plan — it touches the daemon's largest,
 most heavily-tested file. Read this task brief fully before editing; do not
@@ -566,15 +566,15 @@ touch any code outside what's specified.
 
 **Files:**
 - Modify: `src/adapters/chatgpt-web/browser-worker.ts`
-- Test: `tests/browser-worker-hil-gate.test.ts` (new)
+- Test: `tests/browser-worker-hitl-gate.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `HilExecGate` type from Task 4
-  (`src/adapters/chatgpt-web/hil-interceptor.ts`) — import only the type,
+- Consumes: `HitlExecGate` type from Task 4
+  (`src/adapters/chatgpt-web/hitl-interceptor.ts`) — import only the type,
   not the factory function (this file must not depend on `parseExecRequest`
-  or approval/exec logic directly; `hilExecGate` is injected by the caller,
+  or approval/exec logic directly; `hitlExecGate` is injected by the caller,
   Task 6).
-- Produces: a new optional field `hilExecGate?: HilExecGate` on the
+- Produces: a new optional field `hitlExecGate?: HitlExecGate` on the
   `BrowserTurn` interface (`browser-worker.ts:1144-1178` area) that Task 6
   sets.
 
@@ -621,12 +621,12 @@ before the loop, from `waitForNewAssistantTurn`) and `submissionBaseline`
 `loggedCompletionWait`, `capturedResponse`, `sentAt`, `completionFenceRevision`
 are already `let`.
 
-- [ ] **Step 1: Add the `HilExecGate` type import and the new `BrowserTurn` field**
+- [ ] **Step 1: Add the `HitlExecGate` type import and the new `BrowserTurn` field**
 
 At the top of `browser-worker.ts`, add:
 
 ```ts
-import type { HilExecGate } from "./hil-interceptor";
+import type { HitlExecGate } from "./hitl-interceptor";
 ```
 
 In the `BrowserTurn` interface (`browser-worker.ts:1144-1178`), add, right
@@ -635,7 +635,7 @@ after the existing `completionFence` field:
 ```ts
   /** Content-driven alternative to declaring the turn finished: on a match,
    * submits a follow-up into the same page instead of finalizing. */
-  hilExecGate?: HilExecGate;
+  hitlExecGate?: HitlExecGate;
 ```
 
 - [ ] **Step 2: Change three `const` declarations to `let`**
@@ -667,14 +667,14 @@ to:
       let domHealthTracker = new ChatGptTurnDomHealthTracker();
 ```
 
-- [ ] **Step 3: Insert the `hilExecGate` branch before finalization**
+- [ ] **Step 3: Insert the `hitlExecGate` branch before finalization**
 
 Immediately before `if (snapshot.visibleText === "api_tool unavailable") { ... }`
 (the block quoted in Background above), insert:
 
 ```ts
-            if (turn.hilExecGate) {
-              const verdict = await turn.hilExecGate.check(snapshot.visibleText);
+            if (turn.hitlExecGate) {
+              const verdict = await turn.hitlExecGate.check(snapshot.visibleText);
               if (verdict.action === "resume") {
                 submissionBaseline = await this.captureSubmissionBaseline(page);
                 await this.attachPromptWithCompactionRetry(
@@ -730,7 +730,7 @@ loop) — do not redeclare them. `sentAt` is declared `const` earlier
 (`browser-worker.ts:4744`); change that declaration to `let sentAt = Date.now();`
 as well, alongside the Step 2 changes.
 
-- [ ] **Step 4: Suppress the turn deadline while `hilExecGate` is present**
+- [ ] **Step 4: Suppress the turn deadline while `hitlExecGate` is present**
 
 At `browser-worker.ts:4364-4366`:
 
@@ -743,23 +743,23 @@ At `browser-worker.ts:4364-4366`:
 change to:
 
 ```ts
-      const deadline = this.config.turnTimeoutMs === undefined || turn.hilExecGate !== undefined
+      const deadline = this.config.turnTimeoutMs === undefined || turn.hitlExecGate !== undefined
         ? undefined
         : Date.now() + this.config.turnTimeoutMs;
 ```
 
-This reuses `turn.hilExecGate`'s mere presence as the "no deadline" signal —
-no new `BrowserTurn` field is needed, since HIL turns always want an
+This reuses `turn.hitlExecGate`'s mere presence as the "no deadline" signal —
+no new `BrowserTurn` field is needed, since HITL turns always want an
 unbounded deadline (spec §5) and never need a *different* bounded one.
 
 - [ ] **Step 5: Run the existing `browser-worker-contract.test.ts` suite for regressions**
 
 Run: `bun test tests/browser-worker-contract.test.ts`
 Expected: all pass, unchanged — every existing `BrowserTurn` in that suite
-has `hilExecGate: undefined`, so both the Step 3 branch and the Step 4
+has `hitlExecGate: undefined`, so both the Step 3 branch and the Step 4
 deadline change are inert and every other line is untouched.
 
-- [ ] **Step 6: Write the new HIL-gate tests**
+- [ ] **Step 6: Write the new HITL-gate tests**
 
 Model the fake `Page`/DOM harness from the closest existing tests in
 `tests/browser-worker-contract.test.ts` — specifically
@@ -767,23 +767,23 @@ Model the fake `Page`/DOM harness from the closest existing tests in
 and the Bigger-Context multipart tests near the end of that file, since both
 already drive `runBrowserTurn` through more than one submit-and-observe
 cycle. Reuse their harness-construction helpers rather than writing a new
-fake `Page` from scratch. Write `tests/browser-worker-hil-gate.test.ts` with
+fake `Page` from scratch. Write `tests/browser-worker-hitl-gate.test.ts` with
 at least these cases:
 
-1. A `hilExecGate` whose `check()` returns `{ action: "resume", followUpText: "[EXEC_RESULT]\n...\n[/EXEC_RESULT]" }` on the first call and `{ action: "finalize" }` on the second: assert the fake page's composer/send-button interactions happen twice (once for the original prompt, once for the follow-up with the exact `followUpText`), and that `worker.run(...)`'s returned promise resolves only after the second `finalize`.
-2. A worker configured with a finite `turnTimeoutMs` (e.g. `1_000`) and a `hilExecGate` present on the turn, whose `check()` artificially delays past that configured timeout (e.g. `await new Promise(r => setTimeout(r, 1_100))` — long enough to exceed the configured `turnTimeoutMs` but short enough to keep the test fast): assert the turn does **not** throw `"ChatGPT web turn timed out"`, confirming Step 4's deadline suppression. Add a second case with the same finite `turnTimeoutMs` but `hilExecGate: undefined`, asserting the existing timeout behavior is unchanged when HIL isn't active.
-3. A case asserting `turn.hilExecGate` is never consulted when it is `undefined` (i.e. today's existing tests already cover this implicitly via Step 5, but add one explicit assertion here that a turn with no `hilExecGate` field finalizes on the first `completionReady` exactly as before).
+1. A `hitlExecGate` whose `check()` returns `{ action: "resume", followUpText: "[EXEC_RESULT]\n...\n[/EXEC_RESULT]" }` on the first call and `{ action: "finalize" }` on the second: assert the fake page's composer/send-button interactions happen twice (once for the original prompt, once for the follow-up with the exact `followUpText`), and that `worker.run(...)`'s returned promise resolves only after the second `finalize`.
+2. A worker configured with a finite `turnTimeoutMs` (e.g. `1_000`) and a `hitlExecGate` present on the turn, whose `check()` artificially delays past that configured timeout (e.g. `await new Promise(r => setTimeout(r, 1_100))` — long enough to exceed the configured `turnTimeoutMs` but short enough to keep the test fast): assert the turn does **not** throw `"ChatGPT web turn timed out"`, confirming Step 4's deadline suppression. Add a second case with the same finite `turnTimeoutMs` but `hitlExecGate: undefined`, asserting the existing timeout behavior is unchanged when HITL isn't active.
+3. A case asserting `turn.hitlExecGate` is never consulted when it is `undefined` (i.e. today's existing tests already cover this implicitly via Step 5, but add one explicit assertion here that a turn with no `hitlExecGate` field finalizes on the first `completionReady` exactly as before).
 
 - [ ] **Step 7: Run the new tests, iterate until passing**
 
-Run: `bun test tests/browser-worker-hil-gate.test.ts`
+Run: `bun test tests/browser-worker-hitl-gate.test.ts`
 Expected: PASS. If the harness reveals the exact `attachPromptWithCompactionRetry`/`sendAttachedPrompt`/`waitForNewAssistantTurn` argument list in Step 3 needs adjustment (e.g. a parameter this plan listed as `undefined` needs a real value for the fake harness to observe correctly), fix the implementation in Step 3 to match the file's real call conventions — the test is the source of truth for correctness here, not this plan's literal code block.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/adapters/chatgpt-web/browser-worker.ts tests/browser-worker-hil-gate.test.ts
-git commit -m "feat: add hilExecGate hook to runBrowserTurn's completion loop"
+git add src/adapters/chatgpt-web/browser-worker.ts tests/browser-worker-hitl-gate.test.ts
+git commit -m "feat: add hitlExecGate hook to runBrowserTurn's completion loop"
 ```
 
 ---
@@ -792,28 +792,28 @@ git commit -m "feat: add hilExecGate hook to runBrowserTurn's completion loop"
 
 **Files:**
 - Modify: `src/adapters/chatgpt-web/index.ts`
-- Test: `tests/chatgpt-web-hil-wiring.test.ts` (new)
+- Test: `tests/chatgpt-web-hitl-wiring.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `createHilExecGate`, `createHilEmitFilter` from Task 4
-  (`src/adapters/chatgpt-web/hil-interceptor.ts`); `TtyApprovalGateway` from
-  `src/hil/approval.ts` (Task 1); `AppConfig.hilEnabled` from Task 2 (reaches
-  this adapter via a new `provider.chatgptWeb.hilEnabled` field — see Step 0
+- Consumes: `createHitlExecGate`, `createHitlEmitFilter` from Task 4
+  (`src/adapters/chatgpt-web/hitl-interceptor.ts`); `TtyApprovalGateway` from
+  `src/hitl/approval.ts` (Task 1); `AppConfig.hitlEnabled` from Task 2 (reaches
+  this adapter via a new `provider.chatgptWeb.hitlEnabled` field — see Step 0
   — since `createChatGptWebAdapter(provider: CodexProviderConfig, ...)` does
   not receive `AppConfig` directly; confirmed by reading
   `src/adapters/chatgpt-web/index.ts:339-345`).
 - Produces: nothing further consumed by later tasks (this is the last task).
 
-- [ ] **Step 0: Thread `hilEnabled` and a workspace root through `CodexProviderConfig.chatgptWeb`**
+- [ ] **Step 0: Thread `hitlEnabled` and a workspace root through `CodexProviderConfig.chatgptWeb`**
 
 In `src/types.ts`, add two fields to the `chatgptWeb` object type
 (`src/types.ts:262-306`), next to the existing `turnTimeoutMs?: number`:
 
 ```ts
-    /** Enables the HIL exec gate for browser-only turns (spec: docs/superpowers/specs/2026-09-13-hil-daemon-integration-design.md). */
-    hilEnabled?: boolean;
+    /** Enables the HITL exec gate for browser-only turns (spec: docs/superpowers/specs/2026-09-13-hitl-daemon-integration-design.md). */
+    hitlEnabled?: boolean;
     /** Workspace root EXEC_REQUEST cwd resolution is bounded to. Defaults to process.cwd(). */
-    hilWorkspaceCwd?: string;
+    hitlWorkspaceCwd?: string;
 ```
 
 In `src/server.ts`, find where other `AppConfig` fields that mirror this
@@ -823,7 +823,7 @@ same `chatgptWeb` shape (e.g. `turnTimeoutMs`, `headed`, `localToolsEnabled`,
 `CodexProviderConfig` passed to the adapter factory for a real request (grep
 `src/server.ts` for `turnTimeoutMs:` or `autoApproveToolCalls:` to find this
 mapping site — every sibling field takes the identical path). Add
-`hilEnabled: config.hilEnabled` and `hilWorkspaceCwd: process.cwd()`
+`hitlEnabled: config.hitlEnabled` and `hitlWorkspaceCwd: process.cwd()`
 alongside them, using the same `config` binding those sibling fields already
 read from.
 
@@ -843,42 +843,42 @@ import { createChatGptWebAdapter } from "../src/adapters/chatgpt-web/index";
 // adapter tests already use (find them via the existing test file(s) that
 // call createChatGptWebAdapter directly).
 
-test("browser-only runTurn wires hilExecGate and an unbounded turnTimeoutMs when hilEnabled", async () => {
-  let capturedTurn: { hilExecGate?: unknown; abortSignal?: AbortSignal } | undefined;
+test("browser-only runTurn wires hitlExecGate and an unbounded turnTimeoutMs when hitlEnabled", async () => {
+  let capturedTurn: { hitlExecGate?: unknown; abortSignal?: AbortSignal } | undefined;
   const fakeWorker = {
     run: (turn: any) => {
       capturedTurn = turn;
       return Promise.resolve("final answer");
     },
   };
-  const adapter = createChatGptWebAdapter(/* construct with config.hilEnabled = true, mode: "browser-only", a real or fake TtyApprovalGateway, and fakeWorker — match the existing test helper's constructor shape */);
+  const adapter = createChatGptWebAdapter(/* construct with config.hitlEnabled = true, mode: "browser-only", a real or fake TtyApprovalGateway, and fakeWorker — match the existing test helper's constructor shape */);
   await new Promise<void>(resolve => {
     void adapter.runTurn(/* a minimal browser-only-mode CodexParsedRequest fixture, matching existing adapter tests' fixtures */, { headers: new Headers() }, () => {}).finally(resolve);
   });
-  expect(capturedTurn?.hilExecGate).toBeDefined();
+  expect(capturedTurn?.hitlExecGate).toBeDefined();
 });
 ```
 
 Adjust this test's setup to match whatever fixture/helper conventions the
 existing `chatgpt-web` adapter test suite already uses (do not invent new
 fixture shapes) — the binding assertion is: **when
-`provider.chatgptWeb.hilEnabled` is true and the turn is in the
+`provider.chatgptWeb.hitlEnabled` is true and the turn is in the
 `!mode.localTools` branch, the `BrowserTurn` passed to `worker.run(...)` has
-a defined `hilExecGate`.** (The deadline-suppression behavior itself is
-already tested in Task 5 via `turn.hilExecGate`'s presence — this test only
+a defined `hitlExecGate`.** (The deadline-suppression behavior itself is
+already tested in Task 5 via `turn.hitlExecGate`'s presence — this test only
 confirms the field is wired, not the timeout behavior again.)
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `bun test tests/chatgpt-web-hil-wiring.test.ts`
-Expected: FAIL — `capturedTurn.hilExecGate` is `undefined`.
+Run: `bun test tests/chatgpt-web-hitl-wiring.test.ts`
+Expected: FAIL — `capturedTurn.hitlExecGate` is `undefined`.
 
 - [ ] **Step 3: Wire it in `src/adapters/chatgpt-web/index.ts`**
 
 At the top of the file, add:
 
 ```ts
-import { createHilExecGate, createHilEmitFilter } from "./hil-interceptor";
+import { createHitlExecGate, createHitlEmitFilter } from "./hitl-interceptor";
 ```
 
 In the `!mode.localTools` branch (`src/adapters/chatgpt-web/index.ts:672-707`,
@@ -918,7 +918,7 @@ to:
 
 ```ts
     if (!mode.localTools) {
-      const hilActive = provider.chatgptWeb?.hilEnabled === true;
+      const hitlActive = provider.chatgptWeb?.hitlEnabled === true;
       const browserTurn = cancellableBrowserTurn(finalizeCheckpoint(worker.run({
         traceId,
         modelId: parsed.modelId,
@@ -944,18 +944,18 @@ to:
           captureLunaCheckpoint: true,
           onLunaCheckpoint: captureCheckpoint,
         } : {}),
-        ...(hilActive ? {
-          hilExecGate: createHilExecGate({
+        ...(hitlActive ? {
+          hitlExecGate: createHitlExecGate({
             approvalGateway: new TtyApprovalGateway(),
-            workspaceCwd: provider.chatgptWeb?.hilWorkspaceCwd ?? process.cwd(),
+            workspaceCwd: provider.chatgptWeb?.hitlWorkspaceCwd ?? process.cwd(),
           }),
         } : {}),
       })), browserAbort);
 ```
 
-Task 5 already made `turn.hilExecGate`'s presence suppress the deadline
+Task 5 already made `turn.hitlExecGate`'s presence suppress the deadline
 inside `browser-worker.ts` (`:4364-4366`) — no further timeout-related change
-is needed here; setting `hilExecGate` above is sufficient.
+is needed here; setting `hitlExecGate` above is sufficient.
 
 Wrap `emit` with the Task 4 filter only for `text_delta` events reaching
 Codex. Find where this `runTurn`'s outer `emit` parameter is used to
@@ -963,19 +963,19 @@ construct the events this branch's `trace`/`text` arrays eventually turn
 into real `AdapterEvent`s sent to the bridge (search this same function for
 where `trace`/`text` get turned into `emit({ type: "text_delta", ... })`
 calls after the browser turn settles) and wrap that emission point with
-`createHilEmitFilter(emit)` when `hilActive`, leaving it as plain `emit`
+`createHitlEmitFilter(emit)` when `hitlActive`, leaving it as plain `emit`
 otherwise.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `bun test tests/chatgpt-web-hil-wiring.test.ts`
+Run: `bun test tests/chatgpt-web-hitl-wiring.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Run the full existing `chatgpt-web` adapter and browser-worker suites for regressions**
 
-Run: `bun test tests/browser-worker-contract.test.ts tests/browser-worker-hil-gate.test.ts tests/chatgpt-web-harness.test.ts tests/chatgpt-web-hil-wiring.test.ts tests/server-lifecycle.test.ts`
-Expected: all pass. This confirms `hilEnabled: false` (today's default for
-every existing test and every real daemon session without `--hil`) leaves
+Run: `bun test tests/browser-worker-contract.test.ts tests/browser-worker-hitl-gate.test.ts tests/chatgpt-web-harness.test.ts tests/chatgpt-web-hitl-wiring.test.ts tests/server-lifecycle.test.ts`
+Expected: all pass. This confirms `hitlEnabled: false` (today's default for
+every existing test and every real daemon session without `--hitl`) leaves
 every existing code path byte-for-byte unchanged.
 
 - [ ] **Step 6: Run the full project test suite**
@@ -987,6 +987,6 @@ Global Constraints — no unrelated regressions).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/adapters/chatgpt-web/index.ts tests/chatgpt-web-hil-wiring.test.ts
-git commit -m "feat: wire hilExecGate and Codex-transcript emit filter into chatgpt-web adapter"
+git add src/adapters/chatgpt-web/index.ts tests/chatgpt-web-hitl-wiring.test.ts
+git commit -m "feat: wire hitlExecGate and Codex-transcript emit filter into chatgpt-web adapter"
 ```

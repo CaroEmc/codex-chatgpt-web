@@ -15,7 +15,7 @@ import {
   type DevChatEvent,
   type DevContextStatus,
 } from "./driver";
-import { TtyApprovalGateway } from "./hil-approval";
+import { TtyApprovalGateway } from "./hitl-approval";
 import {
   createDevContextFiller,
   DEV_CHAT_MODELS,
@@ -39,7 +39,7 @@ Usage:
   codex-chatgpt-web dev status [--json]
   codex-chatgpt-web dev setup --browser-only [--automatic-browser-interaction]
   codex-chatgpt-web dev setup --full --tunnel-id ID --runtime-key-file PATH [--automatic-browser-interaction|--zero-risk-browser-interaction]
-  codex-chatgpt-web dev chat NAME [--model MODEL] [--hil] [MESSAGE]
+  codex-chatgpt-web dev chat NAME [--model MODEL] [--hitl] [MESSAGE]
   codex-chatgpt-web dev list
 
 Repository shortcut:
@@ -58,7 +58,7 @@ Interactive commands:
   /exit                Exit
 
 Launch-time flags:
-  --hil                Enable human-in-the-loop local command execution for this session
+  --hitl                Enable human-in-the-loop local command execution for this session
                        (no new slash command; /help lists session commands only)
 
 Experimental settings:
@@ -166,8 +166,8 @@ function printHeader(
   if (biggerContext) {
     stdout.write(`${yellow("Bigger Context experimental")} · adaptive 1/2/3-message context · same-agent compaction handoff · elevated rate-limit/cooldown risk\n`);
   }
-  if (state.hilEnabled) {
-    stdout.write(`${yellow("HIL local execution enabled")} · this chat may propose local commands for you to approve/reject\n`);
+  if (state.hitlEnabled) {
+    stdout.write(`${yellow("HITL local execution enabled")} · this chat may propose local commands for you to approve/reject\n`);
   }
   stdout.write(`${dim("Codex route is untouched. No Responses port is bound, replaced, stopped, or restarted.")}\n`);
 }
@@ -206,7 +206,7 @@ async function interactive(driver: DevChatDriver, state: DevChatState): Promise<
   stdout.write(`${dim("Type a message or /help. Ctrl-C or Ctrl-D exits.")}\n`);
   const reader = createInterface({ input: stdin, output: stdout });
   reader.on("SIGINT", () => reader.close());
-  // Share this single readline.Interface with the HIL approval gateway instead of letting
+  // Share this single readline.Interface with the HITL approval gateway instead of letting
   // TtyApprovalGateway open a second one on the same stdin: two concurrent readline
   // interfaces on one stream corrupt each other and can permanently hang the REPL's next
   // prompt after the first approval question resolves.
@@ -395,7 +395,7 @@ export async function runDevCommand(args: string[]): Promise<void> {
   activateDevProfileEnvironment(paths);
   const store = new DevChatStore(paths.chatsPath);
   const requestedModel = modelFromCli(takeOption(args, "--model"));
-  const hilRequested = takeFlag(args, "--hil");
+  const hitlRequested = takeFlag(args, "--hitl");
   const name = args.shift();
   if (!name) throw new Error(`DEV chat name is required\n\n${DEV_HELP}`);
   const message = args.join(" ").trim();
@@ -430,7 +430,7 @@ export async function runDevCommand(args: string[]): Promise<void> {
     if (requestedModel && opened.state.model !== requestedModel) {
       driver.setModel(opened.state, requestedModel);
     }
-    driver.setHil(opened.state, hilRequested);
+    driver.setHitl(opened.state, hitlRequested);
     printHeader(opened.state, opened.created, driver.status(opened.state), runtimeConfig.mode, features.biggerContext);
     if (message) await executeMessage(driver, opened.state, message);
     else await interactive(driver, opened.state);

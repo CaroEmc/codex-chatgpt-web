@@ -2,7 +2,7 @@
 
 ## 1. Context & Objective
 
-`docs/hil_prd.md` proposes a Streaming Interceptor Hook: a text-based
+`docs/hitl_prd.md` proposes a Streaming Interceptor Hook: a text-based
 `[EXEC_REQUEST]`/`[EXEC_RESULT]` protocol that lets a ChatGPT Web session request local
 command execution, gated by an interactive terminal approval step, without standing up
 the existing `full`-mode OpenAI Tunnel / MCP connector.
@@ -29,20 +29,20 @@ for this scope: detection runs against each round's already-complete output text
 
 ## 3. Activation
 
-- New per-dev-chat flag `hilEnabled: boolean`, set via a new CLI flag `dev chat NAME
-  --hil` (`src/dev-chat/cli.ts`), persisted in `DevChatState` (`src/dev-chat/session.ts`)
+- New per-dev-chat flag `hitlEnabled: boolean`, set via a new CLI flag `dev chat NAME
+  --hitl` (`src/dev-chat/cli.ts`), persisted in `DevChatState` (`src/dev-chat/session.ts`)
   the same way `model` is.
-- HIL is only usable in browser-only DEV sessions (`config.mode !== "full"`). Requesting
-  `--hil` while `mode === "full"` fails explicitly with a clear error — full mode already
+- HITL is only usable in browser-only DEV sessions (`config.mode !== "full"`). Requesting
+  `--hitl` while `mode === "full"` fails explicitly with a clear error — full mode already
   has real tools and must not also parse prose as commands.
 - When active, `requestBody()` (`src/dev-chat/driver.ts`) selects a new instructions
-  constant `DEV_CHAT_HIL_INSTRUCTIONS` (parallel to `DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS`)
+  constant `DEV_CHAT_HITL_INSTRUCTIONS` (parallel to `DEV_CHAT_BROWSER_ONLY_INSTRUCTIONS`)
   containing the PRD §3.1 protocol block, telling the model to emit `[EXEC_REQUEST]` and
   halt rather than fabricate output.
 
 ## 4. Protocol module
 
-New `src/dev-chat/hil-protocol.ts`:
+New `src/dev-chat/hitl-protocol.ts`:
 
 - `parseExecRequest(text: string): { command: string; cwd?: string; reason?: string } |
   undefined` — matches the PRD's `[EXEC_REQUEST] ... [/EXEC_REQUEST]` block with the given
@@ -66,7 +66,7 @@ if (calls.length === 0) {
 }
 ```
 
-gains a HIL check ahead of the return: when `state.hilEnabled` and `calls.length === 0`,
+gains a HITL check ahead of the return: when `state.hitlEnabled` and `calls.length === 0`,
 run `parseExecRequest(outputText(output))`. If it matches, do **not** return — proceed to
 approval/execution (§6/§7) and push the result as the next round's input, then `continue`
 the same `for` loop using the existing `turnId`. If it doesn't match, existing behavior
@@ -75,7 +75,7 @@ EXEC rounds too — no new counter is introduced.
 
 ## 6. Approval gateway
 
-New `src/dev-chat/hil-approval.ts`:
+New `src/dev-chat/hitl-approval.ts`:
 
 ```ts
 interface ExecProposal { command: string; cwd: string; reason?: string }
@@ -122,7 +122,7 @@ interface ApprovalGateway {
 
 ## 8. CLI/UX
 
-- `dev-chat/cli.ts`: add the `--hil` flag to `dev chat`, help text update, and reject its
+- `dev-chat/cli.ts`: add the `--hitl` flag to `dev chat`, help text update, and reject its
   use with `--model` implying `mode === "full"` (i.e. `chatgpt-web/zero-risk` and any
   route resolved under `mode: "full"`).
 - `EventRenderer` gains rendering for exec proposals/approvals/results, distinct from the

@@ -43,7 +43,7 @@ import {
   type ChatGptWebMultipartStage,
 } from "./prompt";
 import { estimateCompiledChatGptWebInputTokens } from "./input-tokens";
-import type { HilExecGate } from "./hil-interceptor";
+import type { HitlExecGate } from "./hitl-interceptor";
 import {
   assertAuthenticatedChatGptPage,
   assertTemporaryChatPage,
@@ -1173,7 +1173,7 @@ export interface BrowserTurn {
   };
   /** Content-driven alternative to declaring the turn finished: on a match,
    * submits a follow-up into the same page instead of finalizing. */
-  hilExecGate?: HilExecGate;
+  hitlExecGate?: HitlExecGate;
   /** Allow one clean pre-submit composer retry for isolated history compaction only. */
   compaction?: boolean;
   /** Require and remove the private Luna checkpoint tail from the visible Markdown stream. */
@@ -4365,7 +4365,7 @@ export class ChatGptBrowserWorker {
           maxMessageChars,
         );
       }
-      const deadline = this.config.turnTimeoutMs === undefined || turn.hilExecGate !== undefined
+      const deadline = this.config.turnTimeoutMs === undefined || turn.hitlExecGate !== undefined
         ? undefined
         : Date.now() + this.config.turnTimeoutMs;
       let page = await this.runStage(turn.traceId, "browser_page", browserStageTimeouts.browserPage, async (abortSignal) => {
@@ -4947,8 +4947,8 @@ export class ChatGptBrowserWorker {
                 continue;
               }
             }
-            if (turn.hilExecGate) {
-              const verdict = await turn.hilExecGate.check(snapshot.visibleText, turn.abortSignal);
+            if (turn.hitlExecGate) {
+              const verdict = await turn.hitlExecGate.check(snapshot.visibleText, turn.abortSignal);
               if (verdict.action === "resume") {
                 submissionBaseline = await this.captureSubmissionBaseline(page);
                 await this.attachPromptWithCompactionRetry(

@@ -10,7 +10,7 @@ import {
 } from "../src/adapters/chatgpt-web/prompt";
 import { CHATGPT_WEB_LUNA_MODEL_ID, CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { biggerContextPartCount } from "../src/adapters/chatgpt-web/usage";
-import { DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS } from "../src/hil/protocol";
+import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS } from "../src/hitl/protocol";
 import type { CodexParsedRequest } from "../src/types";
 
 function request(reasoning: "low" | "medium" | "high" | "xhigh" | "max"): CodexParsedRequest {
@@ -577,21 +577,21 @@ test("keeps large contexts intact in the inline text envelope", () => {
   expect(compiled.text).not.toContain("SHA-256");
 });
 
-test("a browser-only HIL turn teaches the model the [EXEC_REQUEST] protocol", () => {
+test("a browser-only HITL turn teaches the model the [EXEC_REQUEST] protocol", () => {
   const compiled = compileChatGptWebPrompt(
     request("high"),
     { localToolsEnabled: false, solAvailable: true, proAvailable: false },
     undefined,
-    { hilProtocol: true },
+    { hitlProtocol: true },
   );
-  expect(compiled.text).toContain(DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS);
+  expect(compiled.text).toContain(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS);
   expect(compiled.text).toContain("[EXEC_REQUEST]");
   expect(compiled.text).toContain("Do not fabricate outputs.");
   // The protocol block belongs to the transport contract, not the replayed task context.
   expect(compiled.text.indexOf("[EXEC_REQUEST]")).toBeLessThan(compiled.text.indexOf("<codex_context_json>"));
 });
 
-test("a browser-only turn without HIL never mentions the [EXEC_REQUEST] protocol", () => {
+test("a browser-only turn without HITL never mentions the [EXEC_REQUEST] protocol", () => {
   const compiled = compileChatGptWebPrompt(
     request("high"),
     { localToolsEnabled: false, solAvailable: true, proAvailable: false },
@@ -599,23 +599,23 @@ test("a browser-only turn without HIL never mentions the [EXEC_REQUEST] protocol
   expect(compiled.text).not.toContain("[EXEC_REQUEST]");
 });
 
-test("a Bigger Context HIL commit message also carries the [EXEC_REQUEST] protocol", () => {
+test("a Bigger Context HITL commit message also carries the [EXEC_REQUEST] protocol", () => {
   const compiled = compileChatGptWebPrompt(
     request("high"),
     { localToolsEnabled: false, solAvailable: true, proAvailable: true },
     undefined,
-    { hilProtocol: true, experimentalMultipartParts: CHATGPT_BIGGER_CONTEXT_PARTS },
+    { hitlProtocol: true, experimentalMultipartParts: CHATGPT_BIGGER_CONTEXT_PARTS },
   );
-  expect(compiled.multipart?.commit).toContain(DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS);
+  expect(compiled.multipart?.commit).toContain(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS);
 });
 
-test("HIL cannot be combined with Luna rolling checkpoint capture in one compiled prompt", () => {
+test("HITL cannot be combined with Luna rolling checkpoint capture in one compiled prompt", () => {
   const luna = request("low");
   luna.modelId = CHATGPT_WEB_LUNA_MODEL_ID;
   expect(() => compileChatGptWebPrompt(
     luna,
     { localToolsEnabled: false, solAvailable: false, proAvailable: false },
     undefined,
-    { hilProtocol: true, captureLunaCheckpoint: true },
-  )).toThrow(/HIL local exec is supported only for read-only browser turns/);
+    { hitlProtocol: true, captureLunaCheckpoint: true },
+  )).toThrow(/HITL local exec is supported only for read-only browser turns/);
 });

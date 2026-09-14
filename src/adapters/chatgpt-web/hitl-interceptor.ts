@@ -1,8 +1,8 @@
-import { parseExecRequest } from "../../hil/protocol";
-import { runApprovedCommand, type RawExecRequest } from "../../hil/exec";
-import type { ApprovalDecision, ApprovalGateway, ExecProposal } from "../../hil/approval";
+import { parseExecRequest } from "../../hitl/protocol";
+import { runApprovedCommand, type RawExecRequest } from "../../hitl/exec";
+import type { ApprovalDecision, ApprovalGateway, ExecProposal } from "../../hitl/approval";
 
-export interface HilExecGate {
+export interface HitlExecGate {
   /** `abortSignal` is the owning turn's signal. A turn that is already gone (Codex cancelled
    * mid-approval) must never spawn its approved command, so the gate finalizes instead of
    * resuming both before prompting and again after the approval decision settles. */
@@ -12,14 +12,14 @@ export interface HilExecGate {
   >;
 }
 
-export interface HilExecGateDeps {
+export interface HitlExecGateDeps {
   approvalGateway: ApprovalGateway;
   workspaceCwd: string;
-  /** Injected for testability; defaults to the real src/hil/exec.ts implementation. */
+  /** Injected for testability; defaults to the real src/hitl/exec.ts implementation. */
   runCommand?: (gateway: ApprovalGateway, request: RawExecRequest, workspaceCwd: string) => Promise<string>;
 }
 
-export function createHilExecGate(deps: HilExecGateDeps): HilExecGate {
+export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
   const runCommand = deps.runCommand ?? runApprovedCommand;
   return {
     async check(finalText, abortSignal) {
@@ -48,16 +48,16 @@ export function createHilExecGate(deps: HilExecGateDeps): HilExecGate {
 }
 
 /**
- * Serializes every HIL approval prompt for one adapter onto the daemon's single stdin.
+ * Serializes every HITL approval prompt for one adapter onto the daemon's single stdin.
  *
  * Up to `MAX_CHATGPT_BROWSER_TABS` browser turns can run at once, and each one that hits an
  * `[EXEC_REQUEST]` wants the terminal. `TtyApprovalGateway` opens a `readline.Interface` on
  * stdin for the duration of a prompt, and two concurrent interfaces on one stream corrupt each
- * other and can permanently hang the next prompt (see src/hil/approval.ts). This queue keeps at
+ * other and can permanently hang the next prompt (see src/hitl/approval.ts). This queue keeps at
  * most one prompt live at a time and stamps each proposal with its turn's `traceId`, so an
  * operator approving concurrent turns can tell them apart.
  */
-export class HilApprovalQueue {
+export class HitlApprovalQueue {
   private tail: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly gateway: ApprovalGateway) {}
@@ -86,7 +86,7 @@ export class HilApprovalQueue {
  * (parseExecRequest succeeds) — the exec gate handles the block itself via
  * `check()`, so Codex never needs to see it.
  */
-export function createHilEmitFilter<TEvent extends { type: string; text?: string }>(
+export function createHitlEmitFilter<TEvent extends { type: string; text?: string }>(
   realEmit: (event: TEvent) => void,
 ): (event: TEvent) => void {
   // Buffer the actual candidate `text_delta` events (not just their concatenated text) so a

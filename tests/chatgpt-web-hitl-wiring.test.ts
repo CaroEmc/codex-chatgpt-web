@@ -7,8 +7,8 @@ import { ChatGptBrowserWorker, type BrowserTurn } from "../src/adapters/chatgpt-
 import { createChatGptWebAdapter } from "../src/adapters/chatgpt-web/index";
 import { LauncherBrowserHelperClient } from "../src/adapters/chatgpt-web/launcher-helper-client";
 import { CHATGPT_WEB_LUNA_MODEL_ID } from "../src/adapters/chatgpt-web/model";
-import { DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS } from "../src/hil/protocol";
-import type { ApprovalGateway, ExecProposal } from "../src/hil/approval";
+import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS } from "../src/hitl/protocol";
+import type { ApprovalGateway, ExecProposal } from "../src/hitl/approval";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { chatGptTurnSessions } from "../src/adapters/chatgpt-web/turn-execution";
 import { TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
@@ -16,12 +16,12 @@ import { defaultBrokerEndpoint } from "../src/config";
 import type { AdapterEvent, CodexParsedRequest, CodexProviderConfig, CodexTool } from "../src/types";
 
 // This suite exercises only the `!mode.localTools` ("browser-only" / read-only) branch of
-// `createChatGptWebAdapter`, which is what a real `--hil` daemon session routes through. It
+// `createChatGptWebAdapter`, which is what a real `--hitl` daemon session routes through. It
 // follows the same fake-`worker.run` monkeypatch convention already used throughout
 // tests/chatgpt-web-harness.test.ts (there is no constructor-level worker injection seam on
 // `createChatGptWebAdapter`).
 
-const tempRoot = join(tmpdir(), `codex-chatgpt-web-hil-wiring-${process.pid}-${Date.now()}`);
+const tempRoot = join(tmpdir(), `codex-chatgpt-web-hitl-wiring-${process.pid}-${Date.now()}`);
 mkdirSync(tempRoot, { recursive: true });
 afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
@@ -80,9 +80,9 @@ function rawWireRequest(identitySuffix = "123"): CodexParsedRequest {
 function browserOnlyProvider(overrides: Partial<NonNullable<CodexProviderConfig["chatgptWeb"]>> = {}): CodexProviderConfig {
   return {
     adapter: "chatgpt-web",
-    baseUrl: `browser://chatgpt-hil-wiring-${process.pid}-${Date.now()}-${Math.random()}`,
+    baseUrl: `browser://chatgpt-hitl-wiring-${process.pid}-${Date.now()}-${Math.random()}`,
     chatgptWeb: {
-      brokerSocketPath: brokerTestEndpoint(`cgw-hil-wiring-${process.pid}-${Date.now()}-${Math.random()}`),
+      brokerSocketPath: brokerTestEndpoint(`cgw-hitl-wiring-${process.pid}-${Date.now()}-${Math.random()}`),
       localToolsEnabled: false,
       solAvailable: true,
       proAvailable: true,
@@ -91,18 +91,18 @@ function browserOnlyProvider(overrides: Partial<NonNullable<CodexProviderConfig[
   };
 }
 
-// --- Finding 2: HIL must refuse the launcher browser host instead of silently going inert -----
+// --- Finding 2: HITL must refuse the launcher browser host instead of silently going inert -----
 
-test("createChatGptWebAdapter refuses HIL when the browser host is the launcher", () => {
+test("createChatGptWebAdapter refuses HITL when the browser host is the launcher", () => {
   const provider = browserOnlyProvider({
-    hilEnabled: true,
+    hitlEnabled: true,
     browserHost: "launcher",
     browserHostDescriptorPath: join(tempRoot, "host.json"),
   });
-  expect(() => createChatGptWebAdapter(provider)).toThrow(/HIL requires the managed-chrome browser host/);
+  expect(() => createChatGptWebAdapter(provider)).toThrow(/HITL requires the managed-chrome browser host/);
 });
 
-test("the launcher helper client refuses a BrowserTurn carrying a hilExecGate", async () => {
+test("the launcher helper client refuses a BrowserTurn carrying a hitlExecGate", async () => {
   // The launcher run frame is an explicit field whitelist that cannot carry a live gate object, so
   // dispatching such a turn must fail loudly rather than drop the gate. Checked before the helper
   // process is started, so this needs no fake child.
@@ -112,19 +112,19 @@ test("the launcher helper client refuses a BrowserTurn carrying a hilExecGate", 
     browserHostDescriptorPath: join(tempRoot, "host.json"),
   } as unknown as ConstructorParameters<typeof LauncherBrowserHelperClient>[0]);
   await expect(client.run({
-    traceId: "trace_launcher_hil",
+    traceId: "trace_launcher_hitl",
     modelId: CHATGPT_WEB_MODEL_ID,
     capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: false },
     prepare: async () => ({ text: "prompt", images: [], release: () => {} }),
     onReasoningSummary: () => {},
     onCommentary: () => {},
     onTextDelta: () => {},
-    hilExecGate: { check: async () => ({ action: "finalize" as const }) },
+    hitlExecGate: { check: async () => ({ action: "finalize" as const }) },
   } as unknown as BrowserTurn)).rejects.toThrow(/does not support human-in-the-loop local exec/);
 });
 
-test("browser-only runTurn wires hilExecGate onto the BrowserTurn when hilEnabled", async () => {
-  const provider = browserOnlyProvider({ hilEnabled: true });
+test("browser-only runTurn wires hitlExecGate onto the BrowserTurn when hitlEnabled", async () => {
+  const provider = browserOnlyProvider({ hitlEnabled: true });
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const originalRun = worker.run.bind(worker);
   let capturedTurn: BrowserTurn | undefined;
@@ -136,10 +136,10 @@ test("browser-only runTurn wires hilExecGate onto the BrowserTurn when hilEnable
   try {
     const adapter = createChatGptWebAdapter(provider);
     await adapter.runTurn!(rawWireRequest(), { headers: new Headers() }, () => {});
-    expect(capturedTurn?.hilExecGate).toBeDefined();
+    expect(capturedTurn?.hitlExecGate).toBeDefined();
     // Finding 6: the model is actually told the protocol exists, otherwise the gate can never fire.
     const prepared = await capturedTurn!.prepare();
-    expect(prepared.text).toContain(DEV_CHAT_HIL_PROTOCOL_INSTRUCTIONS);
+    expect(prepared.text).toContain(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS);
   } finally {
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
     chatGptTurnSessions.clear();
@@ -147,7 +147,7 @@ test("browser-only runTurn wires hilExecGate onto the BrowserTurn when hilEnable
   }
 });
 
-test("browser-only runTurn leaves hilExecGate undefined when hilEnabled is not set (default)", async () => {
+test("browser-only runTurn leaves hitlExecGate undefined when hitlEnabled is not set (default)", async () => {
   const provider = browserOnlyProvider();
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const originalRun = worker.run.bind(worker);
@@ -160,7 +160,7 @@ test("browser-only runTurn leaves hilExecGate undefined when hilEnabled is not s
   try {
     const adapter = createChatGptWebAdapter(provider);
     await adapter.runTurn!(rawWireRequest(), { headers: new Headers() }, () => {});
-    expect(capturedTurn?.hilExecGate).toBeUndefined();
+    expect(capturedTurn?.hitlExecGate).toBeUndefined();
     const prepared = await capturedTurn!.prepare();
     expect(prepared.text).not.toContain("[EXEC_REQUEST]");
   } finally {
@@ -174,16 +174,16 @@ test(
   "the raw EXEC_REQUEST protocol block never reaches Codex's transcript across a simulated resume round, "
   + "even though only the last round's text feeds the worker.run return value",
   async () => {
-    const provider = browserOnlyProvider({ hilEnabled: true });
+    const provider = browserOnlyProvider({ hitlEnabled: true });
     const worker = ChatGptBrowserWorker.forProvider(provider);
     const originalRun = worker.run.bind(worker);
     const preText = "Let me check the repository first.\n";
     const execBlock = "[EXEC_REQUEST]\ncommand: ls\nreason: list files\n[/EXEC_REQUEST]";
     const postText = "Found 3 files; the project builds cleanly.";
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = turn => {
-      // Simulate browser-worker's real multi-round HIL behavior (Task 5): every round's text
+      // Simulate browser-worker's real multi-round HITL behavior (Task 5): every round's text
       // is delivered via onTextDelta as it streams (browser-worker resets its own markdown
-      // buffer on every HIL resume), but the eventual resolved promise carries ONLY the LAST
+      // buffer on every HITL resume), but the eventual resolved promise carries ONLY the LAST
       // round's text -- never the full multi-round accumulation. This is the exact shape Task 5's
       // reviewer flagged: the accumulated text/trace arrays built from onTextDelta (not the
       // return value) are what must carry the full exchange forward to emit.
@@ -217,10 +217,10 @@ test(
 );
 
 test(
-  "text buffered by the HIL emit filter is flushed, not silently dropped, when the round ends "
+  "text buffered by the HITL emit filter is flushed, not silently dropped, when the round ends "
   + "via the error path instead of another emitRoundBatch call",
   async () => {
-    const provider = browserOnlyProvider({ hilEnabled: true });
+    const provider = browserOnlyProvider({ hitlEnabled: true });
     const worker = ChatGptBrowserWorker.forProvider(provider);
     const originalRun = worker.run.bind(worker);
     (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = turn => {
@@ -260,10 +260,10 @@ test(
   },
 );
 
-test("a compaction checkpoint turn carries no hilExecGate and no protocol instructions", async () => {
+test("a compaction checkpoint turn carries no hitlExecGate and no protocol instructions", async () => {
   // Compaction turns are told not to call tools and only summarize; a blocking approval prompt
   // (or an exec gate) has no place in one.
-  const provider = browserOnlyProvider({ hilEnabled: true });
+  const provider = browserOnlyProvider({ hitlEnabled: true });
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const originalRun = worker.run.bind(worker);
   let capturedTurn: BrowserTurn | undefined;
@@ -278,7 +278,7 @@ test("a compaction checkpoint turn carries no hilExecGate and no protocol instru
     request._compactionRequest = true;
     await adapter.runTurn!(request, { headers: new Headers() }, () => {});
     expect(capturedTurn?.compaction).toBe(true);
-    expect(capturedTurn?.hilExecGate).toBeUndefined();
+    expect(capturedTurn?.hitlExecGate).toBeUndefined();
     const prepared = await capturedTurn!.prepare();
     expect(prepared.text).not.toContain("[EXEC_REQUEST]");
   } finally {
@@ -290,7 +290,7 @@ test("a compaction checkpoint turn carries no hilExecGate and no protocol instru
 
 // --- Finding 3: one shared, serialized approval surface for concurrent turns ------------------
 
-test("concurrent HIL turns never hold two approval prompts open at once and are labelled by traceId", async () => {
+test("concurrent HITL turns never hold two approval prompts open at once and are labelled by traceId", async () => {
   // Up to MAX_CHATGPT_BROWSER_TABS turns run at once against ONE daemon stdin. Two overlapping
   // TtyApprovalGateway prompts would open two readline interfaces on that single stream.
   const seen: ExecProposal[] = [];
@@ -306,11 +306,11 @@ test("concurrent HIL turns never hold two approval prompts open at once and are 
       return { action: "reject" };
     },
   };
-  const provider = browserOnlyProvider({ hilEnabled: true });
+  const provider = browserOnlyProvider({ hitlEnabled: true });
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const originalRun = worker.run.bind(worker);
   (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
-    const verdict = await turn.hilExecGate!.check(
+    const verdict = await turn.hitlExecGate!.check(
       "[EXEC_REQUEST]\ncommand: echo hi\n[/EXEC_REQUEST]",
       turn.abortSignal,
     );
@@ -319,7 +319,7 @@ test("concurrent HIL turns never hold two approval prompts open at once and are 
     return "done";
   };
   try {
-    const adapter = createChatGptWebAdapter(provider, { hilApprovalGateway: gateway });
+    const adapter = createChatGptWebAdapter(provider, { hitlApprovalGateway: gateway });
     const first = rawWireRequest();
     // A distinct native thread/turn identity, so the two calls are separate executions rather
     // than one deduplicated session replay.
@@ -341,10 +341,10 @@ test("concurrent HIL turns never hold two approval prompts open at once and are 
   }
 });
 
-// --- Finding 4: HIL must stand down when Luna rolling checkpoint capture owns the turn ---------
+// --- Finding 4: HITL must stand down when Luna rolling checkpoint capture owns the turn ---------
 
-test("a Luna rolling-checkpoint turn disables HIL entirely (no gate, no emit filter, one warning)", async () => {
-  const provider = browserOnlyProvider({ hilEnabled: true, solAvailable: false });
+test("a Luna rolling-checkpoint turn disables HITL entirely (no gate, no emit filter, one warning)", async () => {
+  const provider = browserOnlyProvider({ hitlEnabled: true, solAvailable: false });
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const originalRun = worker.run.bind(worker);
   const answer = "Answer with a literal [EXEC_REQUEST]\ncommand: ls\n[/EXEC_REQUEST] sample inside it.";
@@ -365,11 +365,11 @@ test("a Luna rolling-checkpoint turn disables HIL entirely (no gate, no emit fil
     const events: AdapterEvent[] = [];
     await adapter.runTurn!(request, { headers: new Headers() }, event => events.push(event));
 
-    // No gate: a Luna turn's checkpoint stream is created once per turn and is not reset on a HIL
+    // No gate: a Luna turn's checkpoint stream is created once per turn and is not reset on a HITL
     // resume, so a second round would be swallowed by the latched marker or trip the
     // duplicate-marker consistency error.
     expect(capturedTurn?.captureLunaCheckpoint).toBe(true);
-    expect(capturedTurn?.hilExecGate).toBeUndefined();
+    expect(capturedTurn?.hitlExecGate).toBeUndefined();
     // And no emit filter either: withholding text for a gate that will never run would silently
     // drop a chunk of the answer from Codex's transcript.
     const emittedText = events
@@ -380,7 +380,7 @@ test("a Luna rolling-checkpoint turn disables HIL entirely (no gate, no emit fil
       .join("");
     expect(emittedText).toBe(answer);
     expect(warnings.some(line => line.includes(
-      "HIL local exec is disabled for this turn because Luna rolling checkpoint capture is active",
+      "HITL local exec is disabled for this turn because Luna rolling checkpoint capture is active",
     ))).toBe(true);
   } finally {
     console.warn = originalWarn;
