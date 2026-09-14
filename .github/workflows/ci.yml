@@ -24,10 +24,12 @@ jobs:
           if ($PSVersionTable.PSVersion.Major -ne 5) {
             throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
           }
-          $source = Get-Content scripts/install-launcher.ps1 -Raw
-          [void][scriptblock]::Create($source)
-          if ($source.Contains("IsPathFullyQualified")) {
-            throw "The Windows PowerShell 5.1 installer cannot use the .NET Core-only IsPathFullyQualified API"
+          foreach ($script in @("scripts/install-launcher.ps1", "scripts/install-launcher-local.ps1")) {
+            $source = Get-Content $script -Raw
+            [void][scriptblock]::Create($source)
+            if ($source.Contains("IsPathFullyQualified")) {
+              throw "The Windows PowerShell 5.1 installer cannot use the .NET Core-only IsPathFullyQualified API: $script"
+            }
           }
           if (-not [Environment]::Is64BitOperatingSystem) {
             throw "The Windows CI runner must be 64-bit"
