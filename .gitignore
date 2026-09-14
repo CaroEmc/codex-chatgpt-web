@@ -17,3 +17,8 @@ launcher/artifacts/
 .playwright-cli/
 output/
 notes.md
+
+.claude/
+.codex/
+.copilot/
+.sesshu/
