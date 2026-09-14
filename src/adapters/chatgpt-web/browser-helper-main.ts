@@ -112,6 +112,7 @@ const hitlExecWaiters = new Map<string, {
   requestId: number;
   resolve: (result: { action: "finalize" } | { action: "resume"; followUpText: string }) => void;
   reject: (error: Error) => void;
+  cleanup: () => void;
 }>();
 let hitlExecRequestId = 0;
 let completionFenceRequestId = 0;
@@ -143,6 +144,7 @@ function requestShutdown(): Promise<void> {
   }
   completionFenceCommitWaiters.clear();
   for (const waiter of hitlExecWaiters.values()) {
+    waiter.cleanup();
     waiter.reject(new DOMException("Browser helper is shutting down", "AbortError"));
   }
   hitlExecWaiters.clear();
@@ -269,15 +271,34 @@ async function run(message: RunMessage): Promise<void> {
     } : {}),
     ...(message.turn.hitl ? {
       hitlExecGate: {
-        check: (finalText: string) => new Promise<{ action: "finalize" } | { action: "resume"; followUpText: string }>((resolve, reject) => {
+        check: (finalText: string, abortSignal?: AbortSignal) => new Promise<{ action: "finalize" } | { action: "resume"; followUpText: string }>((resolve, reject) => {
           if (hitlExecWaiters.has(message.id)) {
             reject(new Error("Browser helper HITL exec gate already awaits a result"));
             return;
           }
+          if (abortSignal?.aborted) {
+            reject(new DOMException("Browser helper HITL exec approval aborted", "AbortError"));
+            return;
+          }
           hitlExecRequestId += 1;
           const requestId = hitlExecRequestId;
-          hitlExecWaiters.set(message.id, { requestId, resolve, reject });
+          // browser-worker.ts's hitlAbort also fires when a session-expiry alert (CAPTCHA/logout)
+          // becomes visible in the DOM while this turn's own abortSignal never fires — a
+          // child-local source with no IPC representation of its own. The daemon's TTY prompt
+          // keeps waiting until it times out or the operator answers; this listener only unwedges
+          // this child (and, transitively, this turn's HitlApprovalQueue slot once the daemon's
+          // side eventually gives up) rather than cancelling the daemon-side prompt directly.
+          const onAbort = () => {
+            const current = hitlExecWaiters.get(message.id);
+            if (!current || current.requestId !== requestId) return;
+            hitlExecWaiters.delete(message.id);
+            reject(new DOMException("Browser helper HITL exec approval aborted", "AbortError"));
+          };
+          abortSignal?.addEventListener("abort", onAbort, { once: true });
+          const cleanup = () => abortSignal?.removeEventListener("abort", onAbort);
+          hitlExecWaiters.set(message.id, { requestId, resolve, reject, cleanup });
           if (!writeProtocol({ type: "event", id: message.id, event: "hitl_exec_request", requestId, text: finalText })) {
+            cleanup();
             hitlExecWaiters.delete(message.id);
             reject(new Error("Browser helper could not request HITL exec approval"));
           }
@@ -361,6 +382,7 @@ async function run(message: RunMessage): Promise<void> {
     commitWaiter?.reject(new DOMException("Browser helper turn ended before completion-fence commit", "AbortError"));
     const hitlWaiter = hitlExecWaiters.get(message.id);
     hitlExecWaiters.delete(message.id);
+    hitlWaiter?.cleanup();
     hitlWaiter?.reject(new DOMException("Browser helper turn ended before HITL exec approval", "AbortError"));
     abortControllers.delete(message.id);
     turnProgress.delete(message.id);
@@ -489,7 +511,8 @@ input.on("line", line => {
       abortControllers.get(message.id)?.abort();
       return;
     }
-    if ((message.action as string) !== "finalize" && (message.action as string) !== "resume") {
+    const action = message.action as string;
+    if (action !== "finalize" && action !== "resume") {
       writeProtocol({ type: "error", id: message.id, message: "Browser helper HITL exec action is invalid" });
       abortControllers.get(message.id)?.abort();
       return;
@@ -502,6 +525,7 @@ input.on("line", line => {
     const waiter = hitlExecWaiters.get(message.id);
     if (!waiter || waiter.requestId !== message.requestId) return;
     hitlExecWaiters.delete(message.id);
+    waiter.cleanup();
     waiter.resolve(message.action === "finalize" ? { action: "finalize" } : { action: "resume", followUpText: message.followUpText });
   } else if (message.type === "progress") {
     // Progress is meaningful only for a turn this helper is currently running. Ignore every other
@@ -535,6 +559,7 @@ input.on("line", line => {
     commitWaiter?.reject(new DOMException("Browser helper turn aborted before completion-fence commit", "AbortError"));
     const hitlWaiter = hitlExecWaiters.get(message.id);
     hitlExecWaiters.delete(message.id);
+    hitlWaiter?.cleanup();
     hitlWaiter?.reject(new DOMException("Browser helper turn aborted before HITL exec approval", "AbortError"));
   }
   else if (message.type === "shutdown") {

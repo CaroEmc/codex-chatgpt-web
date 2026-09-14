@@ -213,6 +213,22 @@ already browser-host-agnostic.
   callback (identical to the completion-fence handlers) prevents a stale ack
   from being sent. Child-side, `hitlExecWaiters` entries are rejected on
   `abort`/shutdown exactly like `completionFenceBeginWaiters`.
+
+  There is a second, child-local abort source with no IPC representation:
+  `browser-worker.ts` races a `chatGptExpiredSessionAlert` DOM watch against
+  the approval and folds both that and the turn's own `abortSignal` into a
+  single `hitlAbort` controller passed as `gate.check()`'s second argument.
+  Session death (CAPTCHA, logout, disconnect) fires `hitlAbort` without ever
+  touching `pending.turn.abortSignal` on the daemon side, so nothing about the
+  wire protocol observes it — and because the turn timeout is disabled
+  whenever `turn.hitlExecGate` is present, an unhandled `abortSignal` here
+  would hang the child's `check()` forever and, transitively, wedge the
+  daemon's `HitlApprovalQueue` behind a TTY prompt no one will ever answer.
+  The child-side `hitlExecGate.check()` in `browser-helper-main.ts` therefore
+  listens on the passed `abortSignal` itself (rejecting the waiter and
+  cleaning up the listener alongside every other `hitlExecWaiters` deletion
+  site) rather than relying solely on the daemon's `abort` IPC frame — the two
+  abort sources are handled by different mechanisms for this reason.
 - **Malformed protocol frames:** `parseHelperMessage` validates the new event
   the same way it validates every other one; invalid data crashes the
   connection via the existing `handleExit` + terminate path (deliberately

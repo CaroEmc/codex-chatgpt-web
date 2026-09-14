@@ -486,3 +486,88 @@ test("HITL exec gate round-trips finalize and resume decisions through the real 
     await client.close();
   }
 });
+
+test("a child-local abort signal (e.g. session-death) unblocks the child's HITL exec gate even when the daemon's ack never arrives", async () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-launcher-helper-hitl-abort-"));
+  roots.push(root);
+  const helper = join(root, "helper.ts");
+  writeFileSync(helper, `
+    import { ChatGptBrowserWorker } from ${JSON.stringify(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url).href)};
+    // Substitute only the browser. Both sides of the production IPC protocol run unchanged.
+    ChatGptBrowserWorker.prototype.run = async turn => {
+      await turn.onPreparedSelected(false);
+      await turn.prepare();
+      await turn.onSendActivated();
+      turn.onSubmitted();
+      // Model a child-local abort source with no IPC representation of its own, exactly like
+      // browser-worker.ts's hitlAbort firing off a chatGptExpiredSessionAlert DOM watch: nothing
+      // is ever sent to the daemon, and the daemon's own hitlExecGate.check() (below) never
+      // resolves and never sends an ack, modeling a TTY prompt no one will ever answer.
+      const localAbort = new AbortController();
+      setTimeout(() => localAbort.abort(), 50);
+      try {
+        await turn.hitlExecGate.check("[EXEC_REQUEST]\\ncommand: echo hi\\ncwd: .\\nreason: test\\n[/EXEC_REQUEST]", localAbort.signal);
+        throw new Error("expected the gate check to reject once the local abort signal fired");
+      } catch (error) {
+        if (!(error instanceof DOMException) || error.name !== "AbortError") throw error;
+      }
+      turn.onTextDelta("unblocked-locally");
+      return "unblocked-locally";
+    };
+    await import(${JSON.stringify(new URL("../src/adapters/chatgpt-web/browser-helper-main.ts", import.meta.url).href)});
+  `, { mode: 0o700 });
+  const descriptorHelper = join(root, "descriptor-helper.cjs");
+  writeFileSync(descriptorHelper, "process.exit(99);\n", { mode: 0o700 });
+  const descriptorPath = join(root, "launcher.json");
+  writeFileSync(descriptorPath, `${JSON.stringify({
+    version: 3,
+    kind: LAUNCHER_BROWSER_HOST_KIND,
+    profile: "production",
+    pid: process.pid,
+    endpoint: "http://127.0.0.1:39005",
+    control: {
+      endpoint: "http://127.0.0.1:39006",
+      token: "launcher-control-token-0123456789abcdefghijklmnop",
+    },
+    helper: { executable: process.execPath, script: descriptorHelper },
+    partition: "persist:codex-web-gpt-chatgpt",
+    idleUrl: LAUNCHER_BROWSER_IDLE_URL,
+    surfaceId: "launcher_surface_id_0123456789AC",
+    surfaceTargets: { ["launcher_surface_id_0123456789AC"]: "native-owned-target" },
+    createdAt: new Date().toISOString(),
+  })}\n`, { mode: 0o600 });
+  const config: ResolvedBrowserConfig = {
+    appName: "Codex Native2",
+    browserHost: "launcher",
+    browserHostDescriptorPath: descriptorPath,
+    browserHelperScriptPath: helper,
+    storageStatePath: join(root, "unused-state.json"),
+    chromeExecutablePath: join(root, "unused-chrome"),
+    turnTimeoutMs: 60_000,
+    headed: true,
+    autoApproveToolCalls: false,
+  };
+  const client = new LauncherBrowserHelperClient(config);
+  try {
+    const result = await client.run({
+      traceId: "hitl_local_abort_123456",
+      modelId: "gpt-5.6-sol",
+      reasoning: "high",
+      capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: false },
+      prepare: async () => ({ text: "inspect", images: [], release: () => {} }),
+      onSendActivated: () => {},
+      onSubmitted: () => {},
+      onReasoningSummary: () => {},
+      onTextDelta: () => {},
+      hitlExecGate: {
+        // Deliberately never resolves or rejects: this models the daemon-side TTY approval
+        // prompt that no operator will ever answer. If the child's gate didn't honor its own
+        // abortSignal, the whole client.run() call below would hang forever.
+        check: async () => new Promise(() => {}),
+      },
+    } as unknown as Parameters<typeof client.run>[0]);
+    expect(result).toBe("unblocked-locally");
+  } finally {
+    await client.close();
+  }
+});

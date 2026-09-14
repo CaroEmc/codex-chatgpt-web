@@ -110,7 +110,7 @@ test("the launcher helper client refuses a BrowserTurn carrying a hitlExecGate w
   // real helper stub that advertises no features at all, rather than reusing a build of the actual
   // browser-helper-main.ts (which now always advertises hitl-exec-gate after this same commit).
   const helper = join(tempRoot, "featureless-helper.cjs");
-  writeFileSync(helper, "process.stdout.write(JSON.stringify({ type: \"ready\", features: [] }) + \"\\n\");\n", { mode: 0o700 });
+  writeFileSync(helper, "process.stdout.write(JSON.stringify({ type: \"ready\", features: [] }) + \"\\n\");\nprocess.stdin.resume();\n", { mode: 0o700 });
   const descriptorPath = join(tempRoot, "featureless-host.json");
   writeFileSync(descriptorPath, `${JSON.stringify({
     version: 3,
