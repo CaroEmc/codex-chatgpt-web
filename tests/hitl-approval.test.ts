@@ -58,6 +58,43 @@ test("c with an empty replacement keeps the original command", async () => {
   await expect(decision).resolves.toEqual({ action: "run", command: "git status -s" });
 });
 
+test("unrecognized input rejects rather than running (fails closed)", async () => {
+  const { input, output } = fakeTty(true);
+  const gateway = new TtyApprovalGateway(input, output);
+  const decision = gateway.request(proposal);
+  input.write("garbage\n");
+  await expect(decision).resolves.toEqual({ action: "reject" });
+});
+
+test("esc rejects", async () => {
+  const { input, output } = fakeTty(true);
+  const gateway = new TtyApprovalGateway(input, output);
+  const decision = gateway.request(proposal);
+  input.write("esc\n");
+  await expect(decision).resolves.toEqual({ action: "reject" });
+});
+
+test("an abort signal interrupts a pending prompt and rejects", async () => {
+  const { input, output } = fakeTty(true);
+  const gateway = new TtyApprovalGateway(input, output);
+  const controller = new AbortController();
+  const decision = gateway.request(proposal, controller.signal);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  controller.abort();
+  await expect(decision).resolves.toEqual({ action: "reject" });
+  // A stray answer arriving after the abort must not be mistaken for a real decision.
+  input.write("y\n");
+  await new Promise(resolve => setTimeout(resolve, 10));
+});
+
+test("an already-aborted signal rejects without prompting", async () => {
+  const { input, output } = fakeTty(true);
+  const gateway = new TtyApprovalGateway(input, output);
+  const controller = new AbortController();
+  controller.abort();
+  await expect(gateway.request(proposal, controller.signal)).resolves.toEqual({ action: "reject" });
+});
+
 test("an unattended non-TTY stream rejects without prompting", async () => {
   const { input, output } = fakeTty(false);
   const gateway = new TtyApprovalGateway(input, output);

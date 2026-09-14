@@ -3583,6 +3583,59 @@ export class ChatGptBrowserWorker {
     }
   }
 
+  /**
+   * Submits an approved HITL `[EXEC_RESULT]` back into the live ChatGPT conversation and waits
+   * for the model's follow-up turn, without tearing the session down (PRD "web driver loop
+   * integration": attach → send → wait for the resumed assistant turn on the same page/thread).
+   */
+  private async sendHitlFollowUpTurn(
+    page: Page,
+    followUpText: string,
+    mode: ChatGptWebModelMode,
+    turn: BrowserTurn,
+    diagnostics: ChatGptBrowserDiagnostics,
+    completionTracker: ChatGptCompletionTracker,
+    connectorAttemptBudget: ChatGptConnectorAttemptBudget,
+    reuseConversation: boolean,
+    deadline: number | undefined,
+  ): Promise<{ submissionBaseline: ChatGptSubmissionBaseline; responseTurn: ChatGptAssistantTurnBinding }> {
+    const submissionBaseline = await this.captureSubmissionBaseline(page);
+    await this.attachPromptWithCompactionRetry(
+      page,
+      followUpText,
+      mode.localTools,
+      false,
+      submissionBaseline,
+      checkpoint => diagnostics.capture(page, checkpoint),
+      turn.abortSignal,
+      false,
+      connectorAttemptBudget,
+      reuseConversation,
+      mode.thinkEnabled,
+    );
+    await this.sendAttachedPrompt(
+      page,
+      submissionBaseline,
+      checkpoint => diagnostics.capture(page, checkpoint),
+      turn.abortSignal,
+      turn.externalProgress,
+      turn,
+      completionTracker,
+      undefined,
+    );
+    const responseTurn = await this.waitForNewAssistantTurn(
+      page,
+      submissionBaseline,
+      deadline,
+      turn.abortSignal,
+      turn.externalProgress,
+      CHATGPT_RESPONSE_DOM_GRACE_MS,
+      completionTracker,
+      undefined,
+    );
+    return { submissionBaseline, responseTurn };
+  }
+
   private async insertPromptText(page: Page, text: string, abortSignal?: AbortSignal): Promise<void> {
     throwIfPromptAttachmentAborted(abortSignal);
     const composer = await this.activeComposer(page, 30_000, abortSignal);
@@ -4947,43 +5000,41 @@ export class ChatGptBrowserWorker {
                 continue;
               }
             }
-            if (turn.hitlExecGate) {
-              const verdict = await turn.hitlExecGate.check(snapshot.visibleText, turn.abortSignal);
+            const hitlExecGate = turn.hitlExecGate;
+            if (hitlExecGate) {
+              // A pending approval prompt blocks on terminal input indefinitely; if the ChatGPT
+              // session dies underneath it (CAPTCHA/logout/disconnect), nothing would otherwise
+              // interrupt that wait. Race the same session-failure alert used elsewhere against
+              // the approval check and abort it the moment the session is lost, so the HITL gate
+              // fails closed instead of hanging.
+              const hitlAbort = new AbortController();
+              const propagateAbort = () => hitlAbort.abort();
+              turn.abortSignal?.addEventListener("abort", propagateAbort);
+              const sessionWatchAbort = new AbortController();
+              const sessionWatch = chatGptExpiredSessionAlert(page)
+                .waitFor({ state: "visible", timeout: 0, signal: sessionWatchAbort.signal })
+                .then(() => hitlAbort.abort())
+                .catch(() => {});
+              let verdict;
+              try {
+                verdict = await hitlExecGate.check(snapshot.visibleText, hitlAbort.signal);
+              } finally {
+                sessionWatchAbort.abort();
+                turn.abortSignal?.removeEventListener("abort", propagateAbort);
+                await sessionWatch;
+              }
               if (verdict.action === "resume") {
-                submissionBaseline = await this.captureSubmissionBaseline(page);
-                await this.attachPromptWithCompactionRetry(
+                ({ submissionBaseline, responseTurn } = await this.sendHitlFollowUpTurn(
                   page,
                   verdict.followUpText,
-                  mode.localTools,
-                  false,
-                  submissionBaseline,
-                  checkpoint => diagnostics.capture(page, checkpoint),
-                  turn.abortSignal,
-                  false,
+                  mode,
+                  turn,
+                  diagnostics,
+                  completionTracker,
                   connectorAttemptBudget,
                   reuseConversation,
-                  mode.thinkEnabled,
-                );
-                await this.sendAttachedPrompt(
-                  page,
-                  submissionBaseline,
-                  checkpoint => diagnostics.capture(page, checkpoint),
-                  turn.abortSignal,
-                  turn.externalProgress,
-                  turn,
-                  completionTracker,
-                  undefined,
-                );
-                responseTurn = await this.waitForNewAssistantTurn(
-                  page,
-                  submissionBaseline,
                   deadline,
-                  turn.abortSignal,
-                  turn.externalProgress,
-                  CHATGPT_RESPONSE_DOM_GRACE_MS,
-                  completionTracker,
-                  undefined,
-                );
+                ));
                 visibleTrace = new ChatGptVisibleTraceTracker();
                 markdownBuffer = new ChatGptMarkdownBuffer();
                 domHealthTracker = new ChatGptTurnDomHealthTracker();

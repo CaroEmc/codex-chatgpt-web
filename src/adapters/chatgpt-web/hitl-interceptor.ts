@@ -35,7 +35,7 @@ export function createHitlExecGate(deps: HitlExecGateDeps): HitlExecGate {
       const gateway: ApprovalGateway = abortSignal
         ? {
           request: async proposal => {
-            const decision = await deps.approvalGateway.request(proposal);
+            const decision = await deps.approvalGateway.request(proposal, abortSignal);
             return abortSignal.aborted ? { action: "reject" } : decision;
           },
         }
@@ -64,14 +64,14 @@ export class HitlApprovalQueue {
 
   /** An `ApprovalGateway` view bound to one turn; every prompt it raises waits its turn. */
   forTurn(traceId: string): ApprovalGateway {
-    return { request: proposal => this.enqueue({ ...proposal, traceId }) };
+    return { request: (proposal, signal) => this.enqueue({ ...proposal, traceId }, signal) };
   }
 
-  private enqueue(proposal: ExecProposal): Promise<ApprovalDecision> {
+  private enqueue(proposal: ExecProposal, signal?: AbortSignal): Promise<ApprovalDecision> {
     // Chain off settlement (not success) so one failed prompt cannot wedge the queue forever.
     const decision = this.tail.then(
-      () => this.gateway.request(proposal),
-      () => this.gateway.request(proposal),
+      () => this.gateway.request(proposal, signal),
+      () => this.gateway.request(proposal, signal),
     );
     this.tail = decision.then(() => undefined, () => undefined);
     return decision;
@@ -85,6 +85,16 @@ export class HitlApprovalQueue {
  * of `[EXEC_REQUEST]`, or drops it once it completes a well-formed block
  * (parseExecRequest succeeds) — the exec gate handles the block itself via
  * `check()`, so Codex never needs to see it.
+ *
+ * This maps onto the PRD's PASSTHROUGH/BUFFERING/PENDING_APPROVAL streaming
+ * state machine: the fast path below is PASSTHROUGH, buffering a candidate
+ * `[EXEC_REQUEST` prefix is BUFFERING, and PENDING_APPROVAL happens one level
+ * up in `createHitlExecGate.check()`, once a complete block has been parsed
+ * out of the (already DOM-settled) final text. The implementation is built
+ * around adapter `text_delta` events and a completion-fenced DOM snapshot
+ * rather than a raw outbound SSE interceptor, because ChatGPT Web has no
+ * server-side SSE stream to hook — the "stream" here is scraped from the
+ * page, not proxied.
  */
 export function createHitlEmitFilter<TEvent extends { type: string; text?: string }>(
   realEmit: (event: TEvent) => void,

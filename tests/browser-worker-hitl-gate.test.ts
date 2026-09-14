@@ -47,7 +47,15 @@ function chainable(): any {
   node.isVisible = async () => false;
   node.isEnabled = async () => true;
   node.count = async () => 0;
-  node.waitFor = async () => {};
+  // Mirrors real Playwright: waiting for an element that never becomes visible hangs until the
+  // caller's own AbortSignal fires (or, absent one, forever) — it must not resolve immediately,
+  // or a race like `Promise.race([...watchers])` would always pick this branch first.
+  node.waitFor = (opts?: { signal?: AbortSignal }) => new Promise<void>((_resolve, reject) => {
+    const signal = opts?.signal;
+    if (!signal) return;
+    if (signal.aborted) { reject(new Error("aborted")); return; }
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
   node.press = async () => {};
   return node;
 }
@@ -224,10 +232,15 @@ test("a resume verdict submits the exact follow-up text, and the turn only final
   }
 }, 20_000);
 
-test("runBrowserTurn hands the turn's own abortSignal to every hitlExecGate check", async () => {
-  // The gate opens a blocking TTY prompt and then spawns a real shell command. Without the turn's
-  // signal it cannot tell that Codex cancelled the turn while the operator was deciding, and would
-  // run the command for a turn that no longer exists.
+test("runBrowserTurn hands an abortSignal that follows the turn's own signal to every hitlExecGate check", async () => {
+  // The gate opens a blocking TTY prompt and then spawns a real shell command. Without a signal
+  // that reflects the turn's cancellation it cannot tell that Codex cancelled the turn while the
+  // operator was deciding, and would run the command for a turn that no longer exists.
+  //
+  // The signal handed to `check()` is not necessarily the same object as `turn.abortSignal`: it
+  // is combined with a session-failure watch so a dead ChatGPT session also fails the pending
+  // approval closed (see runBrowserTurn's hitlExecGate call site). What must hold is that it
+  // starts unaborted and aborts exactly when the turn's own signal aborts.
   const harness = buildHarness({ responses: ["first answer", "second answer"] });
   try {
     const abort = new AbortController();
@@ -242,7 +255,7 @@ test("runBrowserTurn hands the turn's own abortSignal to every hitlExecGate chec
     };
     await harness.runTurn({ onTextDelta: () => {}, hitlExecGate, abortSignal: abort.signal });
     expect(signals).toHaveLength(2);
-    expect(signals.every(signal => signal === abort.signal)).toBeTrue();
+    expect(signals.every(signal => signal !== undefined && !signal.aborted)).toBeTrue();
   } finally {
     harness.cleanup();
   }

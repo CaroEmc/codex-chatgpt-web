@@ -14,7 +14,7 @@ export type ApprovalDecision =
   | { action: "reject" };
 
 export interface ApprovalGateway {
-  request(proposal: ExecProposal): Promise<ApprovalDecision>;
+  request(proposal: ExecProposal, signal?: AbortSignal): Promise<ApprovalDecision>;
 }
 
 type TtyInput = NodeJS.ReadableStream & { isTTY?: boolean };
@@ -47,21 +47,53 @@ export class TtyApprovalGateway implements ApprovalGateway {
     private readonly sharedReader?: ReadlineInterface,
   ) {}
 
-  async request(proposal: ExecProposal): Promise<ApprovalDecision> {
+  async request(proposal: ExecProposal, signal?: AbortSignal): Promise<ApprovalDecision> {
     if (!this.input.isTTY) return { action: "reject" };
+    if (signal?.aborted) return { action: "reject" };
     const reader = this.sharedReader ?? createInterface({ input: this.input, output: this.output });
     try {
       this.output.write(renderProposal(proposal));
-      const answer = (await reader.question("")).trim().toLowerCase();
-      if (answer === "n" || answer === "esc") return { action: "reject" };
+      const answer = (await this.questionOrAbort(reader, "", signal))?.trim().toLowerCase();
+      // Fail closed: only an explicit Enter/"y" runs as-is. Anything unrecognized
+      // (garbage input, a stray keystroke) rejects rather than silently executing.
+      if (answer === undefined || answer === "n" || answer === "esc") return { action: "reject" };
       if (answer === "c") {
         this.output.write(`Edit command (Enter to keep):\n${proposal.command}\n> `);
-        const edited = (await reader.question("")).trim();
-        return { action: "run", command: edited || proposal.command };
+        const edited = await this.questionOrAbort(reader, "", signal);
+        if (edited === undefined) return { action: "reject" };
+        return { action: "run", command: edited.trim() || proposal.command };
       }
-      return { action: "run", command: proposal.command };
+      if (answer === "" || answer === "y") return { action: "run", command: proposal.command };
+      return { action: "reject" };
     } finally {
       if (!this.sharedReader) reader.close();
     }
+  }
+
+  /** Resolves the question, or `undefined` if `signal` aborts first. On abort, the reader is
+   * closed so a stray answer arriving after the fact cannot be mistaken for a real decision. */
+  private async questionOrAbort(
+    reader: ReadlineInterface,
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    if (!signal) return reader.question(query);
+    return new Promise<string | undefined>(resolvePromise => {
+      const onAbort = () => {
+        resolvePromise(undefined);
+        if (!this.sharedReader) reader.close();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      reader.question(query).then(
+        answer => {
+          signal.removeEventListener("abort", onAbort);
+          resolvePromise(answer);
+        },
+        () => {
+          signal.removeEventListener("abort", onAbort);
+          resolvePromise(undefined);
+        },
+      );
+    });
   }
 }

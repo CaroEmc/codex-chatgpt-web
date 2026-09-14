@@ -12,6 +12,9 @@ export interface RawExecRequest {
 const OUTPUT_CAP_BYTES = 10 * 1024;
 const TIMEOUT_MS = 60_000;
 
+/** `workspaceCwd` is provider-level config (see `hitlWorkspaceCwd`), not resolved per-request:
+ * the Responses API request this daemon receives from Codex carries no workspace/cwd field, so
+ * there is nothing per-request to resolve against. */
 function resolveWorkspaceCwd(request: RawExecRequest, workspaceCwd: string): string | undefined {
   const resolved = resolve(workspaceCwd, request.cwd ?? ".");
   const boundary = resolved === workspaceCwd || resolved.startsWith(`${workspaceCwd}/`);
