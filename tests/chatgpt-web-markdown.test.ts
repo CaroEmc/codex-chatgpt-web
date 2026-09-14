@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { chatGptHtmlToMarkdown } from "../src/adapters/chatgpt-web/markdown";
+import { parseExecRequest } from "../src/hitl/protocol";
 
 test("turns observed inline file path formats into Markdown links", () => {
   const cases = [
@@ -77,4 +78,32 @@ test("converts Obsidian aliases and headings but preserves code examples and emb
     "[[wiki/fenced]]",
     "````",
   ].join("\n"));
+});
+
+test("restores HITL EXEC_REQUEST markers that Turndown would otherwise escape", () => {
+  const html = [
+    "<p>[EXEC_REQUEST]<br>",
+    "command: ls -la<br>",
+    "cwd: /tmp/example<br>",
+    "reason: check the workspace_root contents<br>",
+    "[/EXEC_REQUEST]</p>",
+  ].join("");
+
+  const markdown = chatGptHtmlToMarkdown(html);
+
+  expect(markdown).not.toContain("\\[");
+  expect(markdown).not.toContain("\\_");
+  expect(parseExecRequest(markdown)).toEqual({
+    command: "ls -la",
+    cwd: "/tmp/example",
+    reason: "check the workspace_root contents",
+  });
+});
+
+test("restores HITL EXEC_RESULT markers that Turndown would otherwise escape", () => {
+  const html = "<p>[EXEC_RESULT]<br>exit_code: 0<br>output:<br>done<br>[/EXEC_RESULT]</p>";
+
+  expect(chatGptHtmlToMarkdown(html)).toBe(
+    ["[EXEC_RESULT]", "exit_code: 0", "output:", "done", "[/EXEC_RESULT]"].join("  \n"),
+  );
 });

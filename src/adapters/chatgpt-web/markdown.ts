@@ -71,6 +71,19 @@ function preserveObsidianWikiLinks(markdown: string): string {
   return markdown.replace(/\\\[\\\[([^\r\n]*?)\\\]\\\]/g, "[[$1]]");
 }
 
+function restoreHitlProtocolBlocks(markdown: string): string {
+  // The model emits [EXEC_REQUEST]/[EXEC_RESULT] blocks as plain text, but Turndown escapes
+  // the brackets and underscores like any other literal text (e.g. `\[EXEC\_REQUEST\]`), which
+  // breaks src/hitl/protocol.ts's exact-match parser. Undo that escaping within the block only.
+  return markdown.replace(
+    /\\\[EXEC\\_(REQUEST|RESULT)\\\]([\s\S]*?)\\\[\/EXEC\\_\1\\\]/g,
+    (_match, kind: string, inner: string) => {
+      const unescaped = inner.replace(/\\([\\*`[\]>_])/g, "$1");
+      return `[EXEC_${kind}]${unescaped}[/EXEC_${kind}]`;
+    },
+  );
+}
+
 function obsidianWikiLink(value: string): string | undefined {
   const separator = value.indexOf("|");
   const target = (separator >= 0 ? value.slice(0, separator) : value).trim();
@@ -131,7 +144,9 @@ function linkObsidianWikiLinks(markdown: string): string {
 
 export function chatGptHtmlToMarkdown(html: string): string {
   if (!html.trim()) return "";
-  return linkObsidianWikiLinks(preserveObsidianWikiLinks(turndown.turndown(html))).trim();
+  return linkObsidianWikiLinks(
+    preserveObsidianWikiLinks(restoreHitlProtocolBlocks(turndown.turndown(html))),
+  ).trim();
 }
 
 export interface ChatGptMarkdownSegment {
