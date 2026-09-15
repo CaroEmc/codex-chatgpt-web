@@ -20,12 +20,14 @@ class HitlPopupController {
       fullscreenable: false,
       icon: this.iconPath,
       title: "Codex Web GPT: approval needed",
+      autoHideMenuBar: true,
       webPreferences: {
         preload: this.preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
       },
     });
+    window.setMenu(null);
     let resolve;
     const promise = new Promise((r) => { resolve = r; });
     const entry = { window, resolve, promise, decided: false };

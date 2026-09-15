@@ -19,6 +19,7 @@ function fakeWindowFactory() {
     loadFile(path) { this.loaded = path; queueMicrotask(() => this.webContents.emit("did-finish-load")); }
     close() { if (!this.destroyed) { this.destroyed = true; this.emit("closed"); } }
     isDestroyed() { return this.destroyed; }
+    setMenu(menu) { this.menu = menu; }
   }
   return { FakeWindow, created };
 }
