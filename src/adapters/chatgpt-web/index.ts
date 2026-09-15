@@ -25,7 +25,7 @@ import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity, priorChatGptAbortedTurnIds } from "./environment";
 import { createHitlEmitFilter, createHitlExecGate, HitlApprovalQueue } from "./hitl-interceptor";
-import { withDesktopNotify } from "./hitl-desktop-notify";
+import { withDesktopApproval } from "./hitl-desktop-approval";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt";
 import { createChatGptStructuredOutputValidator } from "./output-validation";
@@ -375,7 +375,7 @@ export function createChatGptWebAdapter(
   const hitlApprovals = hitlActive
     ? new HitlApprovalQueue(
       retainedLauncherDescriptor
-        ? withDesktopNotify(hitlApprovalGateway, retainedLauncherDescriptor)
+        ? withDesktopApproval(hitlApprovalGateway, retainedLauncherDescriptor)
         : hitlApprovalGateway,
     )
     : undefined;
