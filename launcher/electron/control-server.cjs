@@ -38,10 +38,11 @@ function writeJson(response, status, body) {
 }
 
 class BrowserControlServer {
-  constructor({ logger, getBrowserHost, getPreferences }) {
+  constructor({ logger, getBrowserHost, getPreferences, notifyHitlApprovalPending }) {
     this.logger = logger;
     this.getBrowserHost = getBrowserHost;
     this.getPreferences = getPreferences;
+    this.notifyHitlApprovalPending = notifyHitlApprovalPending || (() => {});
     this.token = randomBytes(32).toString("base64url");
     this.port = 0;
     this.server = createServer((request, response) => {
@@ -91,6 +92,21 @@ class BrowserControlServer {
   async handle(request, response) {
     if (!secureTokenMatches(this.token, request.headers.authorization)) {
       writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    if (request.url === "/v1/notify/hitl-pending") {
+      if (request.method !== "POST") {
+        writeJson(response, 404, { error: "not_found" });
+        return;
+      }
+      try {
+        this.notifyHitlApprovalPending();
+      } catch (error) {
+        this.logger.warn("browser.hitl_notification_dispatch_failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      writeJson(response, 200, { ok: true });
       return;
     }
     const isTurn = request.url === "/v1/turn/start"

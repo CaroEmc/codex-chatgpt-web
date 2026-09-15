@@ -25,6 +25,7 @@ import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity, priorChatGptAbortedTurnIds } from "./environment";
 import { createHitlEmitFilter, createHitlExecGate, HitlApprovalQueue } from "./hitl-interceptor";
+import { withDesktopNotify } from "./hitl-desktop-notify";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt";
 import { createChatGptStructuredOutputValidator } from "./output-validation";
@@ -370,8 +371,13 @@ export function createChatGptWebAdapter(
       : undefined;
   // One gateway, one queue, for every concurrent turn this adapter runs: the daemon has a single
   // stdin, and two readline interfaces on it corrupt each other (see src/hitl/approval.ts).
+  const hitlApprovalGateway = dependencies.hitlApprovalGateway ?? new TtyApprovalGateway();
   const hitlApprovals = hitlActive
-    ? new HitlApprovalQueue(dependencies.hitlApprovalGateway ?? new TtyApprovalGateway())
+    ? new HitlApprovalQueue(
+      retainedLauncherDescriptor
+        ? withDesktopNotify(hitlApprovalGateway, retainedLauncherDescriptor)
+        : hitlApprovalGateway,
+    )
     : undefined;
   if (manualInteraction) {
     if (!configuredCapabilities.localToolsEnabled) {
