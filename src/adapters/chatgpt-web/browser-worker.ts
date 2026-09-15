@@ -1174,7 +1174,9 @@ export interface BrowserTurn {
   /** Content-driven alternative to declaring the turn finished: on a match,
    * submits a follow-up into the same page instead of finalizing. */
   hitlExecGate?: HitlExecGate;
-  /** Allow one clean pre-submit composer retry for isolated history compaction only. */
+  /** No longer read by `ChatGptBrowserWorker` (every turn now gets the same one-shot composer
+   * integrity retry, not just compaction turns) -- still validated and forwarded across the
+   * launcher-helper IPC boundary. Candidate for full removal in a follow-up. */
   compaction?: boolean;
   /** Require and remove the private Luna checkpoint tail from the visible Markdown stream. */
   captureLunaCheckpoint?: boolean;
