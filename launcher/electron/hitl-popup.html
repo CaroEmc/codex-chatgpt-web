@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+  <title>Approval needed</title>
+  <style>
+    body { font: 13px -apple-system, "Segoe UI", sans-serif; margin: 16px; color: #1a1a1a; }
+    dt { font-weight: 600; margin-top: 8px; }
+    dd { margin: 2px 0 0; word-break: break-word; }
+    input { width: 100%; box-sizing: border-box; font: inherit; padding: 4px; margin-top: 4px; }
+    .buttons { margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end; }
+    button { font: inherit; padding: 6px 14px; }
+  </style>
+</head>
+<body>
+  <dl>
+    <dt>Reason</dt><dd id="reason"></dd>
+    <dt>Directory</dt><dd id="cwd"></dd>
+    <dt>Command</dt><dd><input id="command" type="text"></dd>
+  </dl>
+  <div class="buttons">
+    <button id="reject">Reject</button>
+    <button id="run" autofocus>Run</button>
+  </div>
+  <script src="./hitl-popup.js"></script>
+</body>
+</html>
