@@ -13,10 +13,11 @@ import {
   inspectLauncherBrowserHost,
   inspectLauncherBrowserHostLiveness,
   notifyLauncherTurn,
-  notifyLauncherHitlApprovalPending,
   markLauncherManualTurnStarted,
   readLauncherBrowserHostDescriptor,
   releaseLauncherRetainedConversation,
+  requestLauncherHitlDecision,
+  notifyLauncherHitlCancelled,
   selectLauncherPage,
   startLauncherManualTurn,
   waitForLauncherManualSent,
@@ -190,11 +191,80 @@ test("launcher retained-conversation release uses its authenticated exact-key en
   }
 });
 
-test("launcher HITL notification sends an authenticated best-effort request", async () => {
-  let received: { url?: string; authorization?: string; method?: string } = {};
+test("launcher HITL decision resolves once the server returns a decision", async () => {
+  let received: { url?: string; body?: unknown; authorization?: string } = {};
+  let callCount = 0;
   const server = createServer(async (request, response) => {
-    for await (const _chunk of request) { /* drain request */ }
-    received = { url: request.url, authorization: request.headers.authorization, method: request.method };
+    callCount += 1;
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    received = {
+      url: request.url,
+      authorization: request.headers.authorization,
+      body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+    };
+    response.writeHead(callCount === 1 ? 202 : 200, { "content-type": "application/json" });
+    response.end(callCount === 1
+      ? '{"status":"pending"}\n'
+      : '{"ok":true,"action":"run","command":"ls -la --edited"}\n');
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server has no port");
+    const path = descriptorFile(`http://127.0.0.1:${address.port}`);
+    await expect(requestLauncherHitlDecision(path, {
+      traceId: "abc123def456",
+      command: "ls -la",
+      cwd: "/workspace",
+      reason: "List files",
+    })).resolves.toEqual({ action: "run", command: "ls -la --edited" });
+    expect(callCount).toBe(2);
+    expect(received).toEqual({
+      url: "/v1/hitl/decide",
+      authorization: "Bearer launcher-control-token-0123456789abcdefghijklmnop",
+      body: { traceId: "abc123def456", command: "ls -la", cwd: "/workspace", reason: "List files" },
+    });
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test("launcher HITL decision never resolves when the launcher is unreachable", async () => {
+  const path = descriptorFile("http://127.0.0.1:1");
+  const decided = requestLauncherHitlDecision(path, {
+    traceId: "abc123def456", command: "ls -la", cwd: "/workspace",
+  });
+  const raced = await Promise.race([
+    decided.then(() => "decided"),
+    new Promise(resolve => setTimeout(() => resolve("timeout"), 300)),
+  ]);
+  expect(raced).toBe("timeout");
+});
+
+test("launcher HITL decision never resolves once its own signal is already aborted", async () => {
+  const path = descriptorFile("http://127.0.0.1:1");
+  const controller = new AbortController();
+  controller.abort();
+  const decided = requestLauncherHitlDecision(path, {
+    traceId: "abc123def456", command: "ls -la", cwd: "/workspace",
+  }, controller.signal);
+  const raced = await Promise.race([
+    decided.then(() => "decided"),
+    new Promise(resolve => setTimeout(() => resolve("timeout"), 300)),
+  ]);
+  expect(raced).toBe("timeout");
+});
+
+test("launcher HITL cancel sends an authenticated best-effort request and never throws", async () => {
+  let received: { url?: string; body?: unknown } = {};
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    received = { url: request.url, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
     response.writeHead(200, { "content-type": "application/json" });
     response.end('{"ok":true}\n');
   });
@@ -206,24 +276,13 @@ test("launcher HITL notification sends an authenticated best-effort request", as
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("test server has no port");
     const path = descriptorFile(`http://127.0.0.1:${address.port}`);
-    await notifyLauncherHitlApprovalPending(path);
-    expect(received).toEqual({
-      url: "/v1/notify/hitl-pending",
-      authorization: "Bearer launcher-control-token-0123456789abcdefghijklmnop",
-      method: "POST",
-    });
+    await notifyLauncherHitlCancelled(path, "abc123def456");
+    expect(received).toEqual({ url: "/v1/hitl/decide/cancel", body: { traceId: "abc123def456" } });
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
-});
-
-test("launcher HITL notification never throws when the launcher is unreachable", async () => {
-  const path = descriptorFile("http://127.0.0.1:1");
-  await expect(notifyLauncherHitlApprovalPending(path, 200)).resolves.toBeUndefined();
-});
-
-test("launcher HITL notification never throws for a missing descriptor", async () => {
-  await expect(notifyLauncherHitlApprovalPending("/nonexistent/launcher-browser.json")).resolves.toBeUndefined();
+  await expect(notifyLauncherHitlCancelled("/nonexistent/launcher-browser.json", "abc123def456"))
+    .resolves.toBeUndefined();
 });
 
 test("launcher turn control preserves explicit user cancellation as a terminal signal", async () => {

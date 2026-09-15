@@ -683,30 +683,81 @@ export async function notifyLauncherTurn(
   }
 }
 
-export const LAUNCHER_HITL_NOTIFY_TIMEOUT_MS = 2_000;
+export const LAUNCHER_HITL_DECIDE_REQUEST_TIMEOUT_MS = 40_000;
 
-/** Best-effort desktop-notification nudge for a pending HITL approval prompt: the prompt itself
- * always still lives in the terminal running the daemon, so this never throws — a missing
- * descriptor, an unreachable launcher, or any other failure is simply swallowed. */
-export async function notifyLauncherHitlApprovalPending(
+export interface LauncherHitlProposal {
+  traceId: string;
+  command: string;
+  cwd: string;
+  reason?: string;
+}
+
+export type LauncherHitlDecision = { action: "run"; command: string } | { action: "reject" };
+
+/** Never rejects: any failure (launcher unreachable, bad response, an already-aborted signal)
+ * resolves a promise that never settles, so this can never win a Promise.race with a bad
+ * outcome -- its only two valid outcomes are "the popup produced a real decision" or "silently
+ * defer to whichever other approval source is racing it". */
+export async function requestLauncherHitlDecision(
   descriptorPath: string,
-  timeoutMs = LAUNCHER_HITL_NOTIFY_TIMEOUT_MS,
-): Promise<void> {
+  proposal: LauncherHitlProposal,
+  signal?: AbortSignal,
+  timeoutMs = LAUNCHER_HITL_DECIDE_REQUEST_TIMEOUT_MS,
+): Promise<LauncherHitlDecision> {
+  for (;;) {
+    if (signal?.aborted) return await new Promise<LauncherHitlDecision>(() => {});
+    let response: Response;
+    try {
+      const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        response = await fetch(`${descriptor.control.endpoint}/v1/hitl/decide`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${descriptor.control.token}`, "content-type": "application/json" },
+          body: JSON.stringify(proposal),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      }
+    } catch {
+      return await new Promise<LauncherHitlDecision>(() => {});
+    }
+    if (response.status === 202) continue;
+    if (!response.ok) return await new Promise<LauncherHitlDecision>(() => {});
+    const body = await response.json().catch(() => undefined) as
+      | { ok: true; action: "run"; command: string }
+      | { ok: true; action: "reject" }
+      | undefined;
+    if (!body?.ok) return await new Promise<LauncherHitlDecision>(() => {});
+    return body.action === "run" ? { action: "run", command: body.command } : { action: "reject" };
+  }
+}
+
+/** Best-effort: tells the launcher to close a still-open popup for `traceId` because the
+ * terminal already answered. Never throws -- there is nothing useful to do with a failure here
+ * other than leave a popup open a little longer than ideal. */
+export async function notifyLauncherHitlCancelled(descriptorPath: string, traceId: string): Promise<void> {
   try {
     const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), 2_000);
     try {
-      await fetch(`${descriptor.control.endpoint}/v1/notify/hitl-pending`, {
+      await fetch(`${descriptor.control.endpoint}/v1/hitl/decide/cancel`, {
         method: "POST",
-        headers: { authorization: `Bearer ${descriptor.control.token}` },
+        headers: { authorization: `Bearer ${descriptor.control.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ traceId }),
         signal: controller.signal,
       });
     } finally {
       clearTimeout(timer);
     }
   } catch {
-    // Best-effort: the TTY prompt is the source of truth.
+    // Best-effort.
   }
 }
 
