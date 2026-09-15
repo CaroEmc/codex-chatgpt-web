@@ -136,26 +136,65 @@ function hookTextPattern(text: string): string {
     .join("(?:\\r\\n|\\n|\\r)");
 }
 
+/** The hook definition and its trust-state table are always written contiguously (see
+ * `installCodexInterruptHookCommand`), but Codex's own TOML editor groups every `[hooks.state.*]`
+ * table together wherever it next rewrites the file, relocating ours away from the hook it
+ * belongs to. Splitting them lets `locateCodexInterruptHook` verify each independently instead of
+ * requiring an adjacency the underlying editor does not preserve. */
+function splitInstalledFragment(installed: InstalledCodexInterruptHook): { header: string; stateBlock: string } {
+  const marker = installed.fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
+  if (marker < 0) throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
+  const ownedPrefix = installed.fragment.slice(0, marker);
+  const stateIndex = ownedPrefix.indexOf("[hooks.state.");
+  if (stateIndex < 0) throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
+  return {
+    header: ownedPrefix.slice(0, stateIndex).replace(/(?:\r\n|\n|\r)+$/, ""),
+    stateBlock: ownedPrefix.slice(stateIndex),
+  };
+}
+
 function locateCodexInterruptHook(text: string, installed: InstalledCodexInterruptHook): Array<{
   start: number; end: number;
 }> {
   const marker = installed.fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
   if (marker < 0) throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
   const ownedPrefix = installed.fragment.slice(0, marker);
-  // Native config writes normalize CRLF to LF; commands and owned fields must still match exactly.
-  const pattern = new RegExp(hookTextPattern(ownedPrefix), "g");
-  const match = pattern.exec(text);
-  if (!match || pattern.exec(text)) {
+  const { header, stateBlock } = splitInstalledFragment(installed);
+
+  // The hook definition (comment through `timeout = 3`) must still appear as one contiguous,
+  // unmodified block. Native config writes normalize CRLF to LF; owned fields must still match
+  // exactly.
+  const headerPattern = new RegExp(hookTextPattern(header), "g");
+  const headerMatch = headerPattern.exec(text);
+  if (!headerMatch || headerPattern.exec(text)) {
     throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
   }
-  const first = match.index;
-  const ownedEnd = first + match[0].length;
+  const first = headerMatch.index;
+  const headerEnd = first + headerMatch[0].length;
   if (interruptGroupCount(text.slice(0, first)) !== installed.groupIndex) {
     throw new Error("Codex interrupt lifecycle hook order changed after setup; refusing to overwrite it");
   }
+
+  // The trust-state table can now live anywhere in the file. Its exact two-line text is unique to
+  // this stateKey/hash pair, so requiring exactly one unambiguous match anywhere is exactly as
+  // strict as requiring adjacency was.
+  const statePattern = new RegExp(hookTextPattern(stateBlock), "g");
+  const stateMatches = [...text.matchAll(statePattern)];
+  if (stateMatches.length !== 1) {
+    throw new Error("Codex interrupt lifecycle hook trust state changed after setup; refusing to overwrite it");
+  }
+  const stateStart = stateMatches[0].index!;
+  const stateEnd = stateStart + stateMatches[0][0].length;
+  if (stateStart < headerEnd && stateEnd > first) {
+    // The header and state patterns are built to be disjoint text; this only guards against a
+    // future bug in that split ever producing overlapping ranges.
+    throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
+  }
+
   const endMarker = text.indexOf(MANAGED_INTERRUPT_HOOK_END);
   if (managedMarkerCount(text) !== 1 || endMarker < 0
-    || (endMarker >= first && endMarker < ownedEnd)
+    || (endMarker >= first && endMarker < headerEnd)
+    || (endMarker >= stateStart && endMarker < stateEnd)
     || text.split(MANAGED_INTERRUPT_HOOK_END).length !== 2) {
     throw new Error("Codex interrupt lifecycle hook markers changed after setup; refusing to overwrite them");
   }
@@ -178,8 +217,13 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
     throw new Error("Codex interrupt lifecycle hook journal hash is invalid");
   }
   // Codex's TOML editor inserts new tables before trailing comments. The end marker can therefore
-  // move past unrelated config even though the owned hook fields remain unchanged.
-  const appendedConfig = text.slice(ownedEnd, endMarker < first ? undefined : endMarker);
+  // move past unrelated config even though the owned hook fields remain unchanged. The relocated
+  // state table's own span is excised first, if it happens to fall in the scanned region, so its
+  // new position is never mistaken for an unexpected insertion.
+  const scanEnd = endMarker < first ? text.length : endMarker;
+  const appendedConfig = stateStart >= headerEnd && stateEnd <= scanEnd
+    ? text.slice(headerEnd, stateStart) + text.slice(stateEnd, scanEnd)
+    : text.slice(headerEnd, scanEnd);
   const firstAssignment = appendedConfig.split(/\r\n|\n|\r/)
     .map(line => line.trim()).find(line => line && !line.startsWith("#"));
   if (firstAssignment && !/^\[\[?.+\]\]?(?:\s*#.*)?$/.test(firstAssignment)) {
@@ -205,7 +249,19 @@ function locateCodexInterruptHook(text: string, installed: InstalledCodexInterru
   const end = endMarker + MANAGED_INTERRUPT_HOOK_END.length;
   const trailing = installed.fragment.slice(marker + MANAGED_INTERRUPT_HOOK_END.length);
   const trailingLength = new RegExp("^" + hookTextPattern(trailing)).exec(text.slice(end))?.[0].length ?? 0;
-  return [{ start: first, end: ownedEnd }, { start: endMarker, end: end + trailingLength }];
+  // When the state table still immediately follows the header (only blank-line whitespace between
+  // them, the layout `installCodexInterruptHookCommand` writes), extend the header's deletion range
+  // through that gap so removal leaves no blank-line residue behind, exactly as it did before the
+  // header and state table were tracked as independently locatable spans.
+  const gapToState = stateStart >= headerEnd ? text.slice(headerEnd, stateStart) : "";
+  const headerDeleteEnd = stateStart >= headerEnd && /^(?:\r\n|\n|\r)*$/.test(gapToState)
+    ? stateStart
+    : headerEnd;
+  return [
+    { start: first, end: headerDeleteEnd },
+    { start: stateStart, end: stateEnd },
+    { start: endMarker, end: end + trailingLength },
+  ];
 }
 
 export function verifyCodexInterruptHook(text: string, installed: InstalledCodexInterruptHook): void {

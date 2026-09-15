@@ -161,3 +161,41 @@ test("restores a hook whose end comment moved before unchanged definitions witho
     }
   }
 });
+
+test("verifies and restores a hook whose trust-state table was relocated elsewhere in the file", () => {
+  const original = 'model = "gpt-5.6-sol"\n';
+  const installed = installCodexInterruptHook(original, "/Users/test/.codex/config.toml", {
+    runtimeCommand: ["/opt/runtime"],
+  });
+  const fragment = installed.installed.fragment;
+  const stateIndex = fragment.indexOf("[hooks.state.");
+  const markerIndex = fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
+  const header = fragment.slice(0, stateIndex);
+  const stateBlock = fragment.slice(stateIndex, markerIndex);
+  const marker = fragment.slice(markerIndex);
+
+  // Simulate Codex's own TOML editor grouping every [hooks.state.*] table together elsewhere in
+  // the file, away from the hook definition that owns it -- the layout that corrupted this
+  // integrity check in production, once the state table was no longer adjacent to its hook. Bare
+  // assignments must stay ahead of any table header to remain top-level TOML.
+  const relocated = `${original}${stateBlock}\n${header}${marker}`;
+  expect(Bun.TOML.parse(relocated)).toMatchObject(Bun.TOML.parse(installed.text));
+  verifyCodexInterruptHook(relocated, installed.installed);
+  const restored = restoreCodexInterruptHook(relocated, installed.installed);
+  expect(Bun.TOML.parse(restored)).toEqual({ model: "gpt-5.6-sol" });
+  verifyCodexInterruptHookRestored(restored);
+
+  for (const changed of [
+    // The relocated trust-state table's hash was tampered with.
+    relocated.replace(`trusted_hash = ${JSON.stringify(installed.installed.trustedHash)}`, 'trusted_hash = "sha256:0"'),
+    // A second copy of the relocated trust-state table appeared: ambiguous, refuse it.
+    `${relocated}\n${stateBlock}`,
+    // The hook definition itself was tampered with, independent of where the state table lives.
+    relocated.replace("timeout = 3", "timeout = 2"),
+    // A foreign table was inserted between the header and its end marker; the relocated state
+    // table's own span must not mask this.
+    relocated.replace(MANAGED_INTERRUPT_HOOK_END, `approved = false\n${MANAGED_INTERRUPT_HOOK_END}`),
+  ]) {
+    expect(() => restoreCodexInterruptHook(changed, installed.installed)).toThrow(/changed after setup/);
+  }
+});
