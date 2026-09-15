@@ -500,3 +500,54 @@ test("browser control server rejects malformed retained-conversation contracts",
     await server.close();
   }
 });
+
+test("browser control server dispatches a HITL notification without touching the browser host", async () => {
+  let calls = 0;
+  const server = await new BrowserControlServer({
+    logger: { info() {}, warn() {} },
+    getBrowserHost: () => assert.fail("HITL notification must not need the browser host"),
+    getPreferences: () => ({}),
+    notifyHitlApprovalPending: () => { calls += 1; },
+  }).start();
+  const descriptor = server.descriptor();
+  try {
+    const unauthenticated = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, { method: "POST" });
+    assert.equal(unauthenticated.status, 401);
+
+    const response = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${descriptor.token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.equal(calls, 1);
+
+    const wrongMethod = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${descriptor.token}` },
+    });
+    assert.equal(wrongMethod.status, 404);
+  } finally {
+    await server.close();
+  }
+});
+
+test("browser control server survives a throwing HITL notification callback", async () => {
+  const server = await new BrowserControlServer({
+    logger: { info() {}, warn() {} },
+    getBrowserHost: () => assert.fail("HITL notification must not need the browser host"),
+    getPreferences: () => ({}),
+    notifyHitlApprovalPending: () => { throw new Error("notification backend unavailable"); },
+  }).start();
+  const descriptor = server.descriptor();
+  try {
+    const response = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${descriptor.token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+  } finally {
+    await server.close();
+  }
+});

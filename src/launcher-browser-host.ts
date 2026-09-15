@@ -683,6 +683,33 @@ export async function notifyLauncherTurn(
   }
 }
 
+export const LAUNCHER_HITL_NOTIFY_TIMEOUT_MS = 2_000;
+
+/** Best-effort desktop-notification nudge for a pending HITL approval prompt: the prompt itself
+ * always still lives in the terminal running the daemon, so this never throws — a missing
+ * descriptor, an unreachable launcher, or any other failure is simply swallowed. */
+export async function notifyLauncherHitlApprovalPending(
+  descriptorPath: string,
+  timeoutMs = LAUNCHER_HITL_NOTIFY_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      await fetch(`${descriptor.control.endpoint}/v1/notify/hitl-pending`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${descriptor.control.token}` },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Best-effort: the TTY prompt is the source of truth.
+  }
+}
+
 export async function releaseLauncherRetainedConversation(
   descriptorPath: string,
   conversationKey: string,

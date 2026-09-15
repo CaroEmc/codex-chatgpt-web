@@ -13,6 +13,7 @@ import {
   inspectLauncherBrowserHost,
   inspectLauncherBrowserHostLiveness,
   notifyLauncherTurn,
+  notifyLauncherHitlApprovalPending,
   markLauncherManualTurnStarted,
   readLauncherBrowserHostDescriptor,
   releaseLauncherRetainedConversation,
@@ -187,6 +188,42 @@ test("launcher retained-conversation release uses its authenticated exact-key en
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
+});
+
+test("launcher HITL notification sends an authenticated best-effort request", async () => {
+  let received: { url?: string; authorization?: string; method?: string } = {};
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* drain request */ }
+    received = { url: request.url, authorization: request.headers.authorization, method: request.method };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"ok":true}\n');
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server has no port");
+    const path = descriptorFile(`http://127.0.0.1:${address.port}`);
+    await notifyLauncherHitlApprovalPending(path);
+    expect(received).toEqual({
+      url: "/v1/notify/hitl-pending",
+      authorization: "Bearer launcher-control-token-0123456789abcdefghijklmnop",
+      method: "POST",
+    });
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
+test("launcher HITL notification never throws when the launcher is unreachable", async () => {
+  const path = descriptorFile("http://127.0.0.1:1");
+  await expect(notifyLauncherHitlApprovalPending(path, 200)).resolves.toBeUndefined();
+});
+
+test("launcher HITL notification never throws for a missing descriptor", async () => {
+  await expect(notifyLauncherHitlApprovalPending("/nonexistent/launcher-browser.json")).resolves.toBeUndefined();
 });
 
 test("launcher turn control preserves explicit user cancellation as a terminal signal", async () => {
