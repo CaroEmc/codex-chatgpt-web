@@ -501,52 +501,77 @@ test("browser control server rejects malformed retained-conversation contracts",
   }
 });
 
-test("browser control server dispatches a HITL notification without touching the browser host", async () => {
-  let calls = 0;
+const TEST_HITL_DECIDE_TIMEOUT_MS = 30;
+
+test("browser control server relays a HITL decision through a bounded long poll", async () => {
+  const calls = [];
+  const hitlApproval = {
+    requestDecision: (traceId, proposal) => calls.push(["requestDecision", traceId, proposal]),
+    waitForDecision: async (traceId) => calls.push(["waitForDecision", traceId]) && { status: "pending" },
+    cancel: (traceId) => calls.push(["cancel", traceId]),
+  };
   const server = await new BrowserControlServer({
     logger: { info() {}, warn() {} },
-    getBrowserHost: () => assert.fail("HITL notification must not need the browser host"),
+    getBrowserHost: () => assert.fail("HITL decide must not need the browser host"),
     getPreferences: () => ({}),
-    notifyHitlApprovalPending: () => { calls += 1; },
+    hitlApproval,
+    hitlDecideObserverTimeoutMs: TEST_HITL_DECIDE_TIMEOUT_MS,
   }).start();
   const descriptor = server.descriptor();
   try {
-    const unauthenticated = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, { method: "POST" });
+    const unauthenticated = await fetch(`${descriptor.endpoint}/v1/hitl/decide`, { method: "POST" });
     assert.equal(unauthenticated.status, 401);
 
-    const response = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, {
+    const post = () => fetch(`${descriptor.endpoint}/v1/hitl/decide`, {
       method: "POST",
-      headers: { authorization: `Bearer ${descriptor.token}` },
+      headers: { authorization: `Bearer ${descriptor.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ traceId: "abcdef123456", command: "ls -la", cwd: "/workspace", reason: "List files" }),
     });
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { ok: true });
-    assert.equal(calls, 1);
+    const first = await post();
+    assert.equal(first.status, 202);
+    assert.deepEqual(await first.json(), { status: "pending" });
+    assert.deepEqual(calls[0], ["requestDecision", "abcdef123456", { command: "ls -la", cwd: "/workspace", reason: "List files" }]);
 
-    const wrongMethod = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, {
-      method: "GET",
-      headers: { authorization: `Bearer ${descriptor.token}` },
+    hitlApproval.waitForDecision = async () => ({ status: "decided", decision: { action: "run", command: "ls -la --edited" } });
+    const second = await post();
+    assert.equal(second.status, 200);
+    assert.deepEqual(await second.json(), { ok: true, action: "run", command: "ls -la --edited" });
+
+    const cancelResponse = await fetch(`${descriptor.endpoint}/v1/hitl/decide/cancel`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${descriptor.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ traceId: "abcdef123456" }),
     });
-    assert.equal(wrongMethod.status, 404);
+    assert.equal(cancelResponse.status, 200);
+    assert.deepEqual(await cancelResponse.json(), { ok: true });
+    assert.deepEqual(calls.at(-1), ["cancel", "abcdef123456"]);
   } finally {
     await server.close();
   }
 });
 
-test("browser control server survives a throwing HITL notification callback", async () => {
+test("browser control server rejects a malformed HITL decide request", async () => {
+  const hitlApproval = {
+    requestDecision: () => assert.fail("must not request a decision for an invalid body"),
+    waitForDecision: async () => ({ status: "pending" }),
+    cancel: () => {},
+  };
   const server = await new BrowserControlServer({
     logger: { info() {}, warn() {} },
-    getBrowserHost: () => assert.fail("HITL notification must not need the browser host"),
+    getBrowserHost: () => assert.fail("HITL decide must not need the browser host"),
     getPreferences: () => ({}),
-    notifyHitlApprovalPending: () => { throw new Error("notification backend unavailable"); },
+    hitlApproval,
   }).start();
   const descriptor = server.descriptor();
+  const post = (body) => fetch(`${descriptor.endpoint}/v1/hitl/decide`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${descriptor.token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
   try {
-    const response = await fetch(`${descriptor.endpoint}/v1/notify/hitl-pending`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${descriptor.token}` },
-    });
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { ok: true });
+    assert.equal((await post({ command: "ls -la", cwd: "/workspace" })).status, 400);
+    assert.equal((await post({ traceId: "abcdef123456", cwd: "/workspace" })).status, 400);
+    assert.equal((await post({ traceId: "abcdef123456", command: "ls -la" })).status, 400);
   } finally {
     await server.close();
   }

@@ -5,6 +5,7 @@ const { releaseRetainedConversation } = require("./retained-turn-release.cjs");
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_MANUAL_START_BODY_BYTES = 3 * 1024 * 1024;
 const MANUAL_SENT_OBSERVER_TIMEOUT_MS = 35_000;
+const HITL_DECIDE_OBSERVER_TIMEOUT_MS = 35_000;
 
 function secureTokenMatches(expected, authorization) {
   const prefix = "Bearer ";
@@ -38,11 +39,12 @@ function writeJson(response, status, body) {
 }
 
 class BrowserControlServer {
-  constructor({ logger, getBrowserHost, getPreferences, notifyHitlApprovalPending }) {
+  constructor({ logger, getBrowserHost, getPreferences, hitlApproval, hitlDecideObserverTimeoutMs = HITL_DECIDE_OBSERVER_TIMEOUT_MS }) {
     this.logger = logger;
     this.getBrowserHost = getBrowserHost;
     this.getPreferences = getPreferences;
-    this.notifyHitlApprovalPending = notifyHitlApprovalPending || (() => {});
+    this.hitlApproval = hitlApproval;
+    this.hitlDecideObserverTimeoutMs = hitlDecideObserverTimeoutMs;
     this.token = randomBytes(32).toString("base64url");
     this.port = 0;
     this.server = createServer((request, response) => {
@@ -94,20 +96,36 @@ class BrowserControlServer {
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
-    if (request.url === "/v1/notify/hitl-pending") {
+    if (request.url === "/v1/hitl/decide" || request.url === "/v1/hitl/decide/cancel") {
       if (request.method !== "POST") {
         writeJson(response, 404, { error: "not_found" });
         return;
       }
       try {
-        this.notifyHitlApprovalPending();
+        const body = await readJson(request, MAX_BODY_BYTES);
+        if (!body || typeof body !== "object" || !/^[A-Za-z0-9_-]{6,128}$/.test(body.traceId || "")) {
+          throw new Error("traceId is invalid");
+        }
+        if (request.url === "/v1/hitl/decide/cancel") {
+          this.hitlApproval.cancel(body.traceId);
+          writeJson(response, 200, { ok: true });
+          return;
+        }
+        if (typeof body.command !== "string" || !body.command) throw new Error("command is invalid");
+        if (typeof body.cwd !== "string" || !body.cwd) throw new Error("cwd is invalid");
+        if (body.reason !== undefined && typeof body.reason !== "string") throw new Error("reason is invalid");
+        this.hitlApproval.requestDecision(body.traceId, { command: body.command, cwd: body.cwd, reason: body.reason });
+        const outcome = await this.hitlApproval.waitForDecision(body.traceId, this.hitlDecideObserverTimeoutMs);
+        if (outcome.status === "pending") {
+          writeJson(response, 202, { status: "pending" });
+          return;
+        }
+        writeJson(response, 200, { ok: true, ...outcome.decision });
+        return;
       } catch (error) {
-        this.logger.warn("browser.hitl_notification_dispatch_failed", {
-          message: error instanceof Error ? error.message : String(error),
-        });
+        writeJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+        return;
       }
-      writeJson(response, 200, { ok: true });
-      return;
     }
     const isTurn = request.url === "/v1/turn/start"
       || request.url === "/v1/turn/heartbeat"
@@ -360,4 +378,4 @@ class BrowserControlServer {
   }
 }
 
-module.exports = { BrowserControlServer, MAX_MANUAL_START_BODY_BYTES, MANUAL_SENT_OBSERVER_TIMEOUT_MS };
+module.exports = { BrowserControlServer, MAX_MANUAL_START_BODY_BYTES, MANUAL_SENT_OBSERVER_TIMEOUT_MS, HITL_DECIDE_OBSERVER_TIMEOUT_MS };
