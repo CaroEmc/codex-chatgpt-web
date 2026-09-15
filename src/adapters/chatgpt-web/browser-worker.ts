@@ -1838,16 +1838,19 @@ class ChatGptBrowserDiagnostics {
               // exactly matched the expected paragraph boundaries and per-line lengths, ruling out
               // attachedPromptText()'s childNodes-join-by-"\n" reconstruction as the cause. Content
               // still diverged mid-line while the line's length stayed correct, consistent with the
-              // rich-text editor silently substituting characters (autocorrect/autoformat). Since
-              // this content is always plain ASCII, nonAsciiCount proves that without recording the
-              // line's actual text.
+              // rich-text editor silently substituting characters (autocorrect/autoformat). That one
+              // occurrence's content (a git-command EXEC_RESULT) happened to be plain ASCII, so a
+              // nonzero unexpectedCharCount there would prove substitution -- but harness prompts in
+              // general can legitimately contain non-ASCII (unicode filenames, non-English content,
+              // tree-drawing output) or tabs, so a nonzero count elsewhere is suggestive, not proof.
               childStructure: composers.map(element => [...element.childNodes].slice(0, 40).map(child => ({
                 nodeType: child.nodeType,
                 tag: child.nodeType === Node.ELEMENT_NODE ? (child as Element).tagName.toLowerCase() : null,
                 brCount: child.nodeType === Node.ELEMENT_NODE
                   ? (child as Element).querySelectorAll("br").length : 0,
                 textChars: (child.textContent ?? "").length,
-                nonAsciiCount: [...(child.textContent ?? "")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length,
+                // Counts non-ASCII code points *and* ASCII control characters (e.g. tab), not only non-ASCII.
+                unexpectedCharCount: [...(child.textContent ?? "")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length,
               }))),
               selectedConnectorCount: selectedConnectors.length,
               exactSelectedConnectorCount: selectedConnectors.filter(
