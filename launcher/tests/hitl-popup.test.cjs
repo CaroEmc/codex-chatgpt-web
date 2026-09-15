@@ -91,3 +91,35 @@ test("cancel closes a still-open popup and is a no-op once already resolved", as
   assert.doesNotThrow(() => controller.cancel("trace-1"));
   assert.doesNotThrow(() => controller.cancel("never-opened"));
 });
+
+test("sequential requestIds within the same turn do not collide (stale-decision regression)", async () => {
+  const { FakeWindow, created } = fakeWindowFactory();
+  const controller = new HitlPopupController({
+    BrowserWindow: FakeWindow,
+    htmlPath: "/fake/hitl-popup.html",
+    preloadPath: "/fake/hitl-popup-preload.cjs",
+    iconPath: "/fake/icon.png",
+    logger: { info() {}, warn() {} },
+  });
+  // First approval in the turn: terminal wins, so the daemon cancels the popup.
+  controller.requestDecision("request-1", { command: "first command", cwd: "/workspace" });
+  controller.cancel("request-1");
+  assert.equal(created.length, 1);
+  assert.equal(created[0].destroyed, true);
+
+  // Second, different approval in the same turn must open a fresh popup window
+  // rather than reusing (or being served) the first approval's settled entry.
+  controller.requestDecision("request-2", { command: "second command", cwd: "/workspace" });
+  assert.equal(created.length, 2);
+  assert.notEqual(created[1], created[0]);
+
+  const waitingFirst = controller.waitForDecision("request-1", 20);
+  const waitingSecond = controller.waitForDecision("request-2", 5_000);
+  controller.respond("request-2", { action: "run", command: "second command" });
+
+  assert.deepEqual(await waitingFirst, { status: "pending" });
+  assert.deepEqual(await waitingSecond, {
+    status: "decided",
+    decision: { action: "run", command: "second command" },
+  });
+});

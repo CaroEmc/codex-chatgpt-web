@@ -686,7 +686,7 @@ export async function notifyLauncherTurn(
 export const LAUNCHER_HITL_DECIDE_REQUEST_TIMEOUT_MS = 40_000;
 
 export interface LauncherHitlProposal {
-  traceId: string;
+  requestId: string;
   command: string;
   cwd: string;
   reason?: string;
@@ -734,14 +734,18 @@ export async function requestLauncherHitlDecision(
       | { ok: true; action: "reject" }
       | undefined;
     if (!body?.ok) return await new Promise<LauncherHitlDecision>(() => {});
-    return body.action === "run" ? { action: "run", command: body.command } : { action: "reject" };
+    if (body.action === "run") {
+      if (typeof body.command !== "string") return await new Promise<LauncherHitlDecision>(() => {});
+      return { action: "run", command: body.command };
+    }
+    return { action: "reject" };
   }
 }
 
-/** Best-effort: tells the launcher to close a still-open popup for `traceId` because the
+/** Best-effort: tells the launcher to close a still-open popup for `requestId` because the
  * terminal already answered. Never throws -- there is nothing useful to do with a failure here
  * other than leave a popup open a little longer than ideal. */
-export async function notifyLauncherHitlCancelled(descriptorPath: string, traceId: string): Promise<void> {
+export async function notifyLauncherHitlCancelled(descriptorPath: string, requestId: string): Promise<void> {
   try {
     const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
     const controller = new AbortController();
@@ -750,7 +754,7 @@ export async function notifyLauncherHitlCancelled(descriptorPath: string, traceI
       await fetch(`${descriptor.control.endpoint}/v1/hitl/decide/cancel`, {
         method: "POST",
         headers: { authorization: `Bearer ${descriptor.control.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ traceId }),
+        body: JSON.stringify({ requestId }),
         signal: controller.signal,
       });
     } finally {

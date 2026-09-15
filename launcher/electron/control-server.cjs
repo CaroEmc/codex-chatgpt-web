@@ -103,19 +103,19 @@ class BrowserControlServer {
       }
       try {
         const body = await readJson(request, MAX_BODY_BYTES);
-        if (!body || typeof body !== "object" || !/^[A-Za-z0-9_-]{6,128}$/.test(body.traceId || "")) {
-          throw new Error("traceId is invalid");
+        if (!body || typeof body !== "object" || !/^[A-Za-z0-9_-]{6,128}$/.test(body.requestId || "")) {
+          throw new Error("requestId is invalid");
         }
         if (request.url === "/v1/hitl/decide/cancel") {
-          this.hitlApproval.cancel(body.traceId);
+          this.hitlApproval.cancel(body.requestId);
           writeJson(response, 200, { ok: true });
           return;
         }
         if (typeof body.command !== "string" || !body.command) throw new Error("command is invalid");
         if (typeof body.cwd !== "string" || !body.cwd) throw new Error("cwd is invalid");
         if (body.reason !== undefined && typeof body.reason !== "string") throw new Error("reason is invalid");
-        this.hitlApproval.requestDecision(body.traceId, { command: body.command, cwd: body.cwd, reason: body.reason });
-        const outcome = await this.hitlApproval.waitForDecision(body.traceId, this.hitlDecideObserverTimeoutMs);
+        this.hitlApproval.requestDecision(body.requestId, { command: body.command, cwd: body.cwd, reason: body.reason });
+        const outcome = await this.hitlApproval.waitForDecision(body.requestId, this.hitlDecideObserverTimeoutMs);
         if (outcome.status === "pending") {
           writeJson(response, 202, { status: "pending" });
           return;

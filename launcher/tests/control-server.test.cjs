@@ -506,9 +506,9 @@ const TEST_HITL_DECIDE_TIMEOUT_MS = 30;
 test("browser control server relays a HITL decision through a bounded long poll", async () => {
   const calls = [];
   const hitlApproval = {
-    requestDecision: (traceId, proposal) => calls.push(["requestDecision", traceId, proposal]),
-    waitForDecision: async (traceId) => calls.push(["waitForDecision", traceId]) && { status: "pending" },
-    cancel: (traceId) => calls.push(["cancel", traceId]),
+    requestDecision: (requestId, proposal) => calls.push(["requestDecision", requestId, proposal]),
+    waitForDecision: async (requestId) => calls.push(["waitForDecision", requestId]) && { status: "pending" },
+    cancel: (requestId) => calls.push(["cancel", requestId]),
   };
   const server = await new BrowserControlServer({
     logger: { info() {}, warn() {} },
@@ -525,7 +525,7 @@ test("browser control server relays a HITL decision through a bounded long poll"
     const post = () => fetch(`${descriptor.endpoint}/v1/hitl/decide`, {
       method: "POST",
       headers: { authorization: `Bearer ${descriptor.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ traceId: "abcdef123456", command: "ls -la", cwd: "/workspace", reason: "List files" }),
+      body: JSON.stringify({ requestId: "abcdef123456", command: "ls -la", cwd: "/workspace", reason: "List files" }),
     });
     const first = await post();
     assert.equal(first.status, 202);
@@ -540,7 +540,7 @@ test("browser control server relays a HITL decision through a bounded long poll"
     const cancelResponse = await fetch(`${descriptor.endpoint}/v1/hitl/decide/cancel`, {
       method: "POST",
       headers: { authorization: `Bearer ${descriptor.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ traceId: "abcdef123456" }),
+      body: JSON.stringify({ requestId: "abcdef123456" }),
     });
     assert.equal(cancelResponse.status, 200);
     assert.deepEqual(await cancelResponse.json(), { ok: true });
@@ -570,8 +570,8 @@ test("browser control server rejects a malformed HITL decide request", async () 
   });
   try {
     assert.equal((await post({ command: "ls -la", cwd: "/workspace" })).status, 400);
-    assert.equal((await post({ traceId: "abcdef123456", cwd: "/workspace" })).status, 400);
-    assert.equal((await post({ traceId: "abcdef123456", command: "ls -la" })).status, 400);
+    assert.equal((await post({ requestId: "abcdef123456", cwd: "/workspace" })).status, 400);
+    assert.equal((await post({ requestId: "abcdef123456", command: "ls -la" })).status, 400);
   } finally {
     await server.close();
   }

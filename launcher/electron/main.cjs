@@ -866,9 +866,14 @@ function registerIpc({ logger, stateStore }) {
     else if (action === "zoom") window.isMaximized() ? window.unmaximize() : window.maximize();
   });
   ipcMain.on("hitl-popup:respond", (event, decision) => {
-    const traceId = [...hitlPopup.pending.entries()]
+    const requestId = [...hitlPopup.pending.entries()]
       .find(([, entry]) => entry.window.webContents === event.sender)?.[0];
-    if (traceId) hitlPopup.respond(traceId, decision);
+    if (!requestId) return;
+    const valid = decision && typeof decision === "object"
+      && ((decision.action === "run" && typeof decision.command === "string")
+        || decision.action === "reject");
+    if (!valid) return;
+    hitlPopup.respond(requestId, decision);
   });
 }
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ApprovalDecision, ApprovalGateway, ExecProposal } from "../../hitl/approval";
 import { notifyLauncherHitlCancelled, requestLauncherHitlDecision } from "../../launcher-browser-host";
 
@@ -22,20 +23,20 @@ export function withDesktopApproval(
       const race = new AbortController();
       const onOuterAbort = () => race.abort();
       signal?.addEventListener("abort", onOuterAbort, { once: true });
-      const traceId = proposal.traceId ?? "untraced";
+      const requestId = randomUUID();
       try {
         return await Promise.race([
           gateway.request(proposal, race.signal),
           deps.requestLauncherHitlDecision(
             descriptorPath,
-            { traceId, command: proposal.command, cwd: proposal.cwd, reason: proposal.reason },
+            { requestId, command: proposal.command, cwd: proposal.cwd, reason: proposal.reason },
             race.signal,
-          ),
+          ).catch(() => new Promise<ApprovalDecision>(() => {})),
         ]);
       } finally {
         race.abort();
         signal?.removeEventListener("abort", onOuterAbort);
-        void deps.notifyLauncherHitlCancelled(descriptorPath, traceId);
+        void deps.notifyLauncherHitlCancelled(descriptorPath, requestId);
       }
     },
   };

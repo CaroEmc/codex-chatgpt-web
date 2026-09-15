@@ -217,7 +217,7 @@ test("launcher HITL decision resolves once the server returns a decision", async
     if (!address || typeof address === "string") throw new Error("test server has no port");
     const path = descriptorFile(`http://127.0.0.1:${address.port}`);
     await expect(requestLauncherHitlDecision(path, {
-      traceId: "abc123def456",
+      requestId: "abc123def456",
       command: "ls -la",
       cwd: "/workspace",
       reason: "List files",
@@ -226,7 +226,7 @@ test("launcher HITL decision resolves once the server returns a decision", async
     expect(received).toEqual({
       url: "/v1/hitl/decide",
       authorization: "Bearer launcher-control-token-0123456789abcdefghijklmnop",
-      body: { traceId: "abc123def456", command: "ls -la", cwd: "/workspace", reason: "List files" },
+      body: { requestId: "abc123def456", command: "ls -la", cwd: "/workspace", reason: "List files" },
     });
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
@@ -236,7 +236,7 @@ test("launcher HITL decision resolves once the server returns a decision", async
 test("launcher HITL decision never resolves when the launcher is unreachable", async () => {
   const path = descriptorFile("http://127.0.0.1:1");
   const decided = requestLauncherHitlDecision(path, {
-    traceId: "abc123def456", command: "ls -la", cwd: "/workspace",
+    requestId: "abc123def456", command: "ls -la", cwd: "/workspace",
   });
   const raced = await Promise.race([
     decided.then(() => "decided"),
@@ -250,7 +250,7 @@ test("launcher HITL decision never resolves once its own signal is already abort
   const controller = new AbortController();
   controller.abort();
   const decided = requestLauncherHitlDecision(path, {
-    traceId: "abc123def456", command: "ls -la", cwd: "/workspace",
+    requestId: "abc123def456", command: "ls -la", cwd: "/workspace",
   }, controller.signal);
   const raced = await Promise.race([
     decided.then(() => "decided"),
@@ -277,7 +277,7 @@ test("launcher HITL cancel sends an authenticated best-effort request and never 
     if (!address || typeof address === "string") throw new Error("test server has no port");
     const path = descriptorFile(`http://127.0.0.1:${address.port}`);
     await notifyLauncherHitlCancelled(path, "abc123def456");
-    expect(received).toEqual({ url: "/v1/hitl/decide/cancel", body: { traceId: "abc123def456" } });
+    expect(received).toEqual({ url: "/v1/hitl/decide/cancel", body: { requestId: "abc123def456" } });
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
