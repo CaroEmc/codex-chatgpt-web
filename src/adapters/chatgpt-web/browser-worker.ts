@@ -3504,7 +3504,7 @@ export class ChatGptBrowserWorker {
     }
   }
 
-  private async resetCompactionComposerForRetry(
+  private async resetComposerForIntegrityRetry(
     page: Page,
     baseline: ChatGptSubmissionBaseline,
     abortSignal?: AbortSignal,
@@ -3513,7 +3513,7 @@ export class ChatGptBrowserWorker {
     const before = await this.currentSubmissionEvidence(page, baseline, abortSignal);
     if (before) {
       throw new ChatGptPromptAttachmentIntegrityError(
-        "ChatGPT changed while the compaction prompt was being prepared. Check the ChatGPT tab before retrying.",
+        "ChatGPT changed while the prompt was being prepared. Check the ChatGPT tab before retrying.",
         new Error(`Submission evidence appeared after prompt attachment failed: ${before}`),
       );
     }
@@ -3527,23 +3527,27 @@ export class ChatGptBrowserWorker {
     const after = await this.currentSubmissionEvidence(page, baseline, abortSignal);
     if (after) {
       throw new ChatGptPromptAttachmentIntegrityError(
-        "ChatGPT changed while the compaction prompt was being reset. Check the ChatGPT tab before retrying.",
+        "ChatGPT changed while the prompt was being reset. Check the ChatGPT tab before retrying.",
         new Error(`Submission evidence appeared while resetting the prompt: ${after}`),
       );
     }
     const observed = await this.attachedPromptText(page, abortSignal);
     if (observed.length > 0) {
       throw new ChatGptPromptAttachmentIntegrityError(
-        `ChatGPT composer could not reset cleanly for compaction retry (actualChars=${observed.length})`,
+        `ChatGPT composer could not reset cleanly for retry (actualChars=${observed.length})`,
       );
     }
   }
 
-  private async attachPromptWithCompactionRetry(
+  /**
+   * Every prompt attachment gets exactly one retry on a `ChatGptPromptAttachmentIntegrityError`
+   * (ChatGPT's Lexical composer occasionally fails to preserve pasted text intact, independent of
+   * turn size), provided there's no DOM evidence the prompt was already submitted.
+   */
+  private async attachPromptWithIntegrityRetry(
     page: Page,
     prompt: string,
     localTools: boolean,
-    compaction: boolean,
     baseline: ChatGptSubmissionBaseline,
     captureDiagnostic?: (checkpoint: string) => Promise<void>,
     abortSignal?: AbortSignal,
@@ -3552,7 +3556,7 @@ export class ChatGptBrowserWorker {
     reuseConnector = false,
     requireThink = false,
   ): Promise<void> {
-    let retryAvailable = compaction;
+    let retryAvailable = true;
     for (;;) {
       try {
         await this.attachPrompt(
@@ -3573,12 +3577,12 @@ export class ChatGptBrowserWorker {
         const evidence = await this.currentSubmissionEvidence(page, baseline, abortSignal);
         if (evidence) {
           throw new ChatGptPromptAttachmentIntegrityError(
-            "ChatGPT changed while the compaction prompt was being prepared. Check the ChatGPT tab before retrying.",
+            "ChatGPT changed while the prompt was being prepared. Check the ChatGPT tab before retrying.",
             new Error(`Prompt attachment failed before submission evidence appeared: ${evidence}`, { cause: error }),
           );
         }
         await captureDiagnostic?.("prompt-attachment-integrity-retry");
-        await this.resetCompactionComposerForRetry(page, baseline, abortSignal);
+        await this.resetComposerForIntegrityRetry(page, baseline, abortSignal);
       }
     }
   }
@@ -3600,11 +3604,10 @@ export class ChatGptBrowserWorker {
     deadline: number | undefined,
   ): Promise<{ submissionBaseline: ChatGptSubmissionBaseline; responseTurn: ChatGptAssistantTurnBinding }> {
     const submissionBaseline = await this.captureSubmissionBaseline(page);
-    await this.attachPromptWithCompactionRetry(
+    await this.attachPromptWithIntegrityRetry(
       page,
       followUpText,
       mode.localTools,
-      false,
       submissionBaseline,
       checkpoint => diagnostics.capture(page, checkpoint),
       turn.abortSignal,
@@ -4700,11 +4703,10 @@ export class ChatGptBrowserWorker {
               const promptAbortSignal = turn.abortSignal
                 ? AbortSignal.any([stageSignal, turn.abortSignal])
                 : stageSignal;
-              return this.attachPromptWithCompactionRetry(
+              return this.attachPromptWithIntegrityRetry(
                 page,
                 finalPrompt,
                 mode.localTools,
-                turn.compaction === true,
                 submissionBaseline,
                 checkpoint => diagnostics.capture(page, checkpoint),
                 promptAbortSignal,

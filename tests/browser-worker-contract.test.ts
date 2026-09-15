@@ -350,7 +350,7 @@ test("a mutating stage timeout preserves a failed cleanup integrity error", asyn
   expect(menuOpen).toBeTrue();
 });
 
-test("compaction retry submission evidence cannot make prompt-stage settlement unbounded", async () => {
+test("integrity-retry submission evidence cannot make prompt-stage settlement unbounded", async () => {
   let evaluateStarted = false;
   const page = {
     evaluate: async () => {
@@ -371,11 +371,10 @@ test("compaction retry submission evidence cannot make prompt-stage settlement u
       clock: { suspendedMs(): number },
       awaitAbortedActionSettlement: boolean,
     ): Promise<T>;
-    attachPromptWithCompactionRetry(
+    attachPromptWithIntegrityRetry(
       page: unknown,
       prompt: string,
       localTools: boolean,
-      compaction: boolean,
       baseline: unknown,
       capture: undefined,
       signal: AbortSignal,
@@ -385,7 +384,7 @@ test("compaction retry submission evidence cannot make prompt-stage settlement u
   };
   const fixture = {
     attachPrompt: async () => {
-      throw new ChatGptPromptAttachmentIntegrityError("force compaction attachment retry");
+      throw new ChatGptPromptAttachmentIntegrityError("force attachment retry");
     },
     currentSubmissionEvidence: prototype.currentSubmissionEvidence,
     submissionDomState: prototype.submissionDomState,
@@ -393,15 +392,14 @@ test("compaction retry submission evidence cannot make prompt-stage settlement u
 
   const result = prototype.runStage.call(
     {},
-    "trace_compaction_retry_timeout",
+    "trace_integrity_retry_timeout",
     "prompt_attachment",
     10,
-    signal => prototype.attachPromptWithCompactionRetry.call(
+    signal => prototype.attachPromptWithIntegrityRetry.call(
       fixture,
       page,
       "prompt",
       false,
-      true,
       baseline,
       undefined,
       signal,
@@ -1044,17 +1042,16 @@ test("plain-text editing command fails closed when the focused composer rejects 
     .rejects.toThrow("rejected the plain-text editing command");
 });
 
-test("compaction prompt attachment retries once only before submission evidence", async () => {
+test("prompt attachment retries once only before submission evidence, for any turn", async () => {
   const attachWithRetry = (ChatGptBrowserWorker.prototype as unknown as {
-    attachPromptWithCompactionRetry(
+    attachPromptWithIntegrityRetry(
       page: unknown,
       prompt: string,
       localTools: boolean,
-      compaction: boolean,
       baseline: unknown,
       captureDiagnostic?: (checkpoint: string) => Promise<void>,
     ): Promise<void>;
-  }).attachPromptWithCompactionRetry;
+  }).attachPromptWithIntegrityRetry;
   const baseline = {
     userTurns: {},
     responseTurns: {},
@@ -1073,8 +1070,8 @@ test("compaction prompt attachment retries once only before submission evidence"
       }
     },
     currentSubmissionEvidence: async () => undefined,
-    resetCompactionComposerForRetry: async () => { resets += 1; },
-  }, {}, "compact prompt", false, true, baseline, async checkpoint => { checkpoints.push(checkpoint); });
+    resetComposerForIntegrityRetry: async () => { resets += 1; },
+  }, {}, "compact prompt", false, baseline, async checkpoint => { checkpoints.push(checkpoint); });
 
   expect(attempts).toBe(2);
   expect(resets).toBe(1);
@@ -1087,20 +1084,24 @@ test("compaction prompt attachment retries once only before submission evidence"
       throw new ChatGptPromptAttachmentIntegrityError("composer cleared");
     },
     currentSubmissionEvidence: async () => "user_turn",
-    resetCompactionComposerForRetry: async () => { throw new Error("must not reset"); },
-  }, {}, "compact prompt", false, true, baseline)).rejects.toThrow(
-    "ChatGPT changed while the compaction prompt was being prepared",
+    resetComposerForIntegrityRetry: async () => { throw new Error("must not reset"); },
+  }, {}, "compact prompt", false, baseline)).rejects.toThrow(
+    "ChatGPT changed while the prompt was being prepared",
   );
   expect(duplicateAttempts).toBe(1);
 
-  let normalAttempts = 0;
+  // A second failure after the one allowed retry propagates instead of retrying again --
+  // this is what previously fully non-"compaction" turns hit on their very first failure.
+  let secondFailureAttempts = 0;
   await expect(attachWithRetry.call({
     attachPrompt: async () => {
-      normalAttempts += 1;
+      secondFailureAttempts += 1;
       throw new ChatGptPromptAttachmentIntegrityError("composer cleared");
     },
-  }, {}, "normal prompt", false, false, baseline)).rejects.toThrow("composer cleared");
-  expect(normalAttempts).toBe(1);
+    currentSubmissionEvidence: async () => undefined,
+    resetComposerForIntegrityRetry: async () => {},
+  }, {}, "normal prompt", false, baseline)).rejects.toThrow("composer cleared");
+  expect(secondFailureAttempts).toBe(2);
 });
 
 test("prompt insertion stops before touching the composer when its stage is already aborted", async () => {

@@ -26,7 +26,7 @@ type WorkerStubSurface = {
   prepareTemporaryChatSurface: (...args: unknown[]) => Promise<void>;
   selectModelAndEffort: (...args: unknown[]) => Promise<unknown>;
   captureSubmissionBaseline: (...args: unknown[]) => Promise<unknown>;
-  attachPromptWithCompactionRetry: (...args: unknown[]) => Promise<void>;
+  attachPromptWithIntegrityRetry: (...args: unknown[]) => Promise<void>;
   sendAttachedPrompt: (...args: unknown[]) => Promise<string>;
   waitForNewAssistantTurn: (...args: unknown[]) => Promise<unknown>;
   responseDomSnapshot: (...args: unknown[]) => Promise<unknown>;
@@ -140,7 +140,7 @@ function buildHarness(options: {
     initialTurnIdentities: [],
     domCache: {},
   });
-  worker.attachPromptWithCompactionRetry = async (...args: unknown[]) => {
+  worker.attachPromptWithIntegrityRetry = async (...args: unknown[]) => {
     attachCalls.push({ prompt: args[1] as string });
   };
   worker.sendAttachedPrompt = async () => {
