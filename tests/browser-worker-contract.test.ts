@@ -456,17 +456,22 @@ test("diagnostics capture identifies which typographic-substitute character appe
   // non-sensitive set of dash/quote/ellipsis characters), not the surrounding prompt content, so the
   // exact substitution can be confirmed and then corrected.
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
-  const unexpectedCharCount = workerSource.indexOf("unexpectedCharCount:");
-  const suspectSubstituteChars = workerSource.indexOf("suspectSubstituteChars", unexpectedCharCount);
-  const suspectSubstitutes = workerSource.indexOf("suspectSubstitutes:", suspectSubstituteChars);
+  const declaration = workerSource.indexOf("const suspectSubstituteChars = new Set(");
+  const declarationEnd = workerSource.indexOf("]);", declaration);
+  const unexpectedCharCount = workerSource.indexOf("unexpectedCharCount:", declarationEnd);
+  const suspectSubstitutes = workerSource.indexOf("suspectSubstitutes:", unexpectedCharCount);
 
-  expect(unexpectedCharCount).toBeGreaterThan(-1);
-  expect(suspectSubstituteChars).toBeGreaterThan(unexpectedCharCount);
-  expect(suspectSubstitutes).toBeGreaterThan(suspectSubstituteChars);
+  expect(declaration).toBeGreaterThan(-1);
+  expect(declarationEnd).toBeGreaterThan(declaration);
+  expect(unexpectedCharCount).toBeGreaterThan(declarationEnd);
+  expect(suspectSubstitutes).toBeGreaterThan(unexpectedCharCount);
+  // Anchor to the whitelist literal itself -- the file's prose comments elsewhere already contain
+  // an ordinary em dash, so an unscoped toContain check wouldn't actually prove it's in the Set.
+  const whitelistLiteral = workerSource.slice(declaration, declarationEnd);
   // En dash, em dash, minus sign -- the characters "-" is most commonly autocorrected to.
-  expect(workerSource).toContain("–");
-  expect(workerSource).toContain("—");
-  expect(workerSource).toContain("−");
+  expect(whitelistLiteral).toContain("–");
+  expect(whitelistLiteral).toContain("—");
+  expect(whitelistLiteral).toContain("−");
   expect(workerSource).toContain("[...(child.textContent ?? \"\")].filter(char => suspectSubstituteChars.has(char))");
 });
 
