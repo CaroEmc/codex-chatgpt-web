@@ -705,7 +705,7 @@
   In `launcher/tests/control-server.test.cjs`, replace the two tests named `"browser control server dispatches a HITL notification without touching the browser host"` and `"browser control server survives a throwing HITL notification callback"` with:
 
   ```js
-  const HITL_DECIDE_OBSERVER_TIMEOUT_MS = 30;
+  const TEST_HITL_DECIDE_TIMEOUT_MS = 30;
 
   test("browser control server relays a HITL decision through a bounded long poll", async () => {
     const calls = [];
@@ -719,7 +719,7 @@
       getBrowserHost: () => assert.fail("HITL decide must not need the browser host"),
       getPreferences: () => ({}),
       hitlApproval,
-      hitlDecideObserverTimeoutMs: HITL_DECIDE_OBSERVER_TIMEOUT_MS,
+      hitlDecideObserverTimeoutMs: TEST_HITL_DECIDE_TIMEOUT_MS,
     }).start();
     const descriptor = server.descriptor();
     try {
@@ -787,7 +787,13 @@
 
 - [ ] **Step 2: Replace the endpoint and constructor dependency**
 
-  In `launcher/electron/control-server.cjs`, replace the constructor:
+  In `launcher/electron/control-server.cjs`, add alongside the existing `MANUAL_SENT_OBSERVER_TIMEOUT_MS` module-level constant (same file, same style):
+
+  ```js
+  const HITL_DECIDE_OBSERVER_TIMEOUT_MS = 35_000;
+  ```
+
+  Replace the constructor:
 
   ```js
   constructor({ logger, getBrowserHost, getPreferences, notifyHitlApprovalPending }) {
@@ -800,13 +806,15 @@
   with:
 
   ```js
-  constructor({ logger, getBrowserHost, getPreferences, hitlApproval, hitlDecideObserverTimeoutMs = 30_000 }) {
+  constructor({ logger, getBrowserHost, getPreferences, hitlApproval, hitlDecideObserverTimeoutMs = HITL_DECIDE_OBSERVER_TIMEOUT_MS }) {
     this.logger = logger;
     this.getBrowserHost = getBrowserHost;
     this.getPreferences = getPreferences;
     this.hitlApproval = hitlApproval;
     this.hitlDecideObserverTimeoutMs = hitlDecideObserverTimeoutMs;
   ```
+
+  Add `HITL_DECIDE_OBSERVER_TIMEOUT_MS` to this file's `module.exports` alongside the existing `MANUAL_SENT_OBSERVER_TIMEOUT_MS` export, so tests and other modules can reference the real production value instead of duplicating the literal.
 
   Replace the `/v1/notify/hitl-pending` block with:
 
