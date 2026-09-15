@@ -11,13 +11,13 @@ const {
   Menu,
   nativeImage,
   nativeTheme,
-  Notification,
   screen,
   shell,
   Tray,
 } = require("electron");
 const { BrowserHost, navigationErrorForLog } = require("./browser-host.cjs");
 const { BrowserControlServer } = require("./control-server.cjs");
+const { HitlPopupController } = require("./hitl-popup.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const {
   createLogger,
@@ -81,6 +81,7 @@ let mainWindowShowRequested = false;
 let browserHost = null;
 let runtimeHost = null;
 let browserControl = null;
+let hitlPopup = null;
 let runtimeSupervisor = null;
 let tray = null;
 let quitting = false;
@@ -189,33 +190,6 @@ function trayImage() {
   const image = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`);
   image.setTemplateImage(true);
   return image;
-}
-
-/** Best-effort: a HITL approval prompt always still lives in the terminal running the daemon,
- * so a notification failure here (unsupported platform, no notification daemon) must never
- * surface as an error or block the approval flow that triggered it. */
-function notifyHitlApprovalPending(logger) {
-  try {
-    const supported = Notification.isSupported();
-    logger.info("browser.hitl_notification_dispatched", { supported });
-    if (supported) {
-      new Notification({
-        title: "Codex Web GPT",
-        body: "A local command needs your approval — check the terminal running codex-chatgpt-web.",
-      }).show();
-    }
-  } catch (error) {
-    logger.warn("browser.hitl_notification_failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  try {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(true);
-  } catch (error) {
-    logger.warn("browser.hitl_notification_flash_failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 const NATIVE_COPY = Object.freeze({
@@ -891,6 +865,11 @@ function registerIpc({ logger, stateStore }) {
     else if (action === "minimize") window.minimize();
     else if (action === "zoom") window.isMaximized() ? window.unmaximize() : window.maximize();
   });
+  ipcMain.on("hitl-popup:respond", (event, decision) => {
+    const traceId = [...hitlPopup.pending.entries()]
+      .find(([, entry]) => entry.window.webContents === event.sender)?.[0];
+    if (traceId) hitlPopup.respond(traceId, decision);
+  });
 }
 
 async function requestQuit() {
@@ -996,11 +975,18 @@ async function start() {
     windowStatePath: path.join(app.getPath("userData"), "window-state.json"),
     startHidden,
   });
+  hitlPopup = new HitlPopupController({
+    BrowserWindow,
+    htmlPath: path.join(__dirname, "hitl-popup.html"),
+    preloadPath: path.join(__dirname, "hitl-popup-preload.cjs"),
+    iconPath: APP_ICON_PATH,
+    logger,
+  });
   browserControl = await new BrowserControlServer({
     logger,
     getBrowserHost: () => browserHost,
     getPreferences: () => stateStore.read(),
-    notifyHitlApprovalPending: () => notifyHitlApprovalPending(logger),
+    hitlApproval: hitlPopup,
   }).start();
   runtimeSupervisor = new RuntimeSupervisor({
     app,
