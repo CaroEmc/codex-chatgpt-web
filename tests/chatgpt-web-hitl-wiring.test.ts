@@ -171,6 +171,32 @@ test("browser-only runTurn wires hitlExecGate onto the BrowserTurn when hitlEnab
   }
 });
 
+test("the 'Local tools unavailable' warning is suppressed for a turn where HITL is actually active", async () => {
+  const provider = browserOnlyProvider({ hitlEnabled: true });
+  const worker = ChatGptBrowserWorker.forProvider(provider);
+  const originalRun = worker.run.bind(worker);
+  (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = turn => {
+    turn.onTextDelta("final answer");
+    return Promise.resolve("final answer");
+  };
+  try {
+    const adapter = createChatGptWebAdapter(provider);
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(rawWireRequest(), { headers: new Headers() }, event => events.push(event));
+    const commentary = events
+      .filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => (
+        event.type === "text_delta" && event.phase === "commentary"
+      ))
+      .map(event => event.text)
+      .join("");
+    expect(commentary).not.toContain("Local tools unavailable");
+  } finally {
+    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
+    chatGptTurnSessions.clear();
+    await TurnBroker.forSocket(provider.chatgptWeb!.brokerSocketPath!).close();
+  }
+});
+
 test("browser-only runTurn leaves hitlExecGate undefined when hitlEnabled is not set (default)", async () => {
   const provider = browserOnlyProvider();
   const worker = ChatGptBrowserWorker.forProvider(provider);
