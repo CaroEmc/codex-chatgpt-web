@@ -429,6 +429,22 @@ test("diagnostics capture exposes each composer line's real DOM shape for integr
   expect(workerSource).toContain('(child as Element).querySelectorAll("br").length : 0');
 });
 
+test("diagnostics capture flags non-ASCII characters per composer line without recording the line's actual text", () => {
+  // A real occurrence's childStructure exactly matched the expected paragraph boundaries and
+  // per-line lengths, ruling out the childNodes-join structural mismatch. But content still
+  // diverged partway through one line while its length stayed correct -- consistent with the
+  // rich-text editor silently substituting characters (e.g. autocorrect/autoformat turning "-" or
+  // "|" into a different, same-width character). The source content here is always plain ASCII, so
+  // a nonzero count directly proves character substitution without capturing the raw text itself.
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const childStructure = workerSource.indexOf("childStructure: composers.map(element =>");
+  const nonAsciiCount = workerSource.indexOf("nonAsciiCount:", childStructure);
+
+  expect(childStructure).toBeGreaterThan(-1);
+  expect(nonAsciiCount).toBeGreaterThan(childStructure);
+  expect(workerSource).toContain("[...(child.textContent ?? \"\")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length");
+});
+
 test("launcher page acquisition proves a nonzero operational viewport before DOM interaction", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
   const connect = workerSource.indexOf("const connection = await connectLauncherBrowserHost(");

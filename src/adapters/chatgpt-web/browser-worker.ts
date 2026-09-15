@@ -1834,18 +1834,20 @@ class ChatGptBrowserDiagnostics {
                 contentEditable: (element as HTMLElement).isContentEditable,
                 focused: element === document.activeElement,
               })),
-              // Diagnoses ChatGptPromptAttachmentIntegrityError: attachedPromptText() reconstructs
-              // the composer's text by joining direct childNodes with "\n", assuming one line per
-              // top-level node. If the editor instead represents some line breaks as <br> within a
-              // single node, that assumption silently produces a same-length-but-wrong-content
-              // mismatch. This exposes the composer's actual top-level child structure so a real
-              // occurrence can confirm or rule that out, rather than guessing from character counts.
+              // Diagnoses ChatGptPromptAttachmentIntegrityError. A real occurrence's childStructure
+              // exactly matched the expected paragraph boundaries and per-line lengths, ruling out
+              // attachedPromptText()'s childNodes-join-by-"\n" reconstruction as the cause. Content
+              // still diverged mid-line while the line's length stayed correct, consistent with the
+              // rich-text editor silently substituting characters (autocorrect/autoformat). Since
+              // this content is always plain ASCII, nonAsciiCount proves that without recording the
+              // line's actual text.
               childStructure: composers.map(element => [...element.childNodes].slice(0, 40).map(child => ({
                 nodeType: child.nodeType,
                 tag: child.nodeType === Node.ELEMENT_NODE ? (child as Element).tagName.toLowerCase() : null,
                 brCount: child.nodeType === Node.ELEMENT_NODE
                   ? (child as Element).querySelectorAll("br").length : 0,
                 textChars: (child.textContent ?? "").length,
+                nonAsciiCount: [...(child.textContent ?? "")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length,
               }))),
               selectedConnectorCount: selectedConnectors.length,
               exactSelectedConnectorCount: selectedConnectors.filter(
