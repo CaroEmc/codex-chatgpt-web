@@ -475,6 +475,25 @@ test("diagnostics capture identifies which typographic-substitute character appe
   expect(workerSource).toContain("[...(child.textContent ?? \"\")].filter(char => suspectSubstituteChars.has(char))");
 });
 
+test("diagnostics whitelist also covers invisible-space substitutes, not only dash-family punctuation", () => {
+  // A third real occurrence showed unexpectedCharCount=1 with an empty suspectSubstitutes -- the
+  // unusual character wasn't dash/quote/ellipsis. That line was a `git status --short` line, whose
+  // format is "XY filename" with exactly one regular space -- a strong candidate for the editor
+  // substituting a single space with a non-breaking space (U+00A0), a distinct and very common
+  // rich-text autocorrect/autoformat behavior from the dash substitution seen previously.
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const declaration = workerSource.indexOf("const suspectSubstituteChars = new Set(");
+  const declarationEnd = workerSource.indexOf("]);", declaration);
+  const whitelistLiteral = workerSource.slice(declaration, declarationEnd);
+
+  expect(declaration).toBeGreaterThan(-1);
+  expect(declarationEnd).toBeGreaterThan(declaration);
+  expect(whitelistLiteral).toContain(" ");
+  expect(whitelistLiteral).toContain(" ");
+  expect(whitelistLiteral).toContain("​");
+  expect(whitelistLiteral).toContain(" ");
+});
+
 test("launcher page acquisition proves a nonzero operational viewport before DOM interaction", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
   const connect = workerSource.indexOf("const connection = await connectLauncherBrowserHost(");

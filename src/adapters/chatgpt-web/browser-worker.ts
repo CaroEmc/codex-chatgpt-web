@@ -1766,13 +1766,15 @@ class ChatGptBrowserDiagnostics {
           completionActionSelector,
           appName,
         }) => {
-          // Two real ChatGptPromptAttachmentIntegrityError occurrences both showed the mismatch
-          // starting exactly on a composer line whose only unusual character was a literal "-",
-          // pointing at the rich-text editor's autocorrect substituting it for a typographic dash.
-          // This closed, non-sensitive whitelist identifies exactly which substitute shows up.
+          // Real ChatGptPromptAttachmentIntegrityError occurrences have shown the mismatch starting
+          // exactly on a composer line whose only unusual character was a literal "-" (pointing at
+          // dash autocorrect) or, separately, a `git status --short` line's single space (pointing
+          // at a non-breaking-space substitution instead). This closed, non-sensitive whitelist
+          // identifies exactly which substitute shows up, covering both known families so far.
           const suspectSubstituteChars = new Set([
             "‐", "‑", "‒", "–", "—", "―", "−",
             "‘", "’", "“", "”", "…",
+            " ", " ", "​", " ",
           ]);
           const rendered = (element: Element): boolean => {
             const candidate = element as HTMLElement;
