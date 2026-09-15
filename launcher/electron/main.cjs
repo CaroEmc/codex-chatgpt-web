@@ -196,7 +196,9 @@ function trayImage() {
  * surface as an error or block the approval flow that triggered it. */
 function notifyHitlApprovalPending(logger) {
   try {
-    if (Notification.isSupported()) {
+    const supported = Notification.isSupported();
+    logger.info("browser.hitl_notification_dispatched", { supported });
+    if (supported) {
       new Notification({
         title: "Codex Web GPT",
         body: "A local command needs your approval — check the terminal running codex-chatgpt-web.",
