@@ -1004,6 +1004,49 @@ test("prompt verification accepts Lexical NBSP preservation without weakening ot
   ).resolves.toBeUndefined();
 });
 
+test("prompt verification captures diagnostics with the mismatched composer text still observed, before any cleanup can clear it", async () => {
+  // A prior diagnostic capture fired only after attachPrompt's catch block had already cleared the
+  // composer (clearChatGptComposerState), so it only ever recorded an empty composer -- never the
+  // actual mismatched content. Capturing inside assertPromptAttached itself, at the moment the
+  // mismatch is detected and before the error is thrown, is the only point guaranteed to still
+  // observe the real composer state.
+  const realDateNow = Date.now;
+  let now = 1_000;
+  Date.now = () => now;
+  try {
+    const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
+      attachedPromptText: async () => {
+        // Force the 10s deadline loop to exit after this single observation.
+        now += 11_000;
+        return "mismatched observed text";
+      },
+    }) as ChatGptBrowserWorker;
+
+    const captured: string[] = [];
+    const assertPromptAttached = (ChatGptBrowserWorker.prototype as unknown as {
+      assertPromptAttached(
+        page: Page,
+        prompt: string,
+        captureDiagnostic?: (checkpoint: string) => Promise<void>,
+        abortSignal?: AbortSignal,
+      ): Promise<void>;
+    }).assertPromptAttached;
+
+    await expect(
+      assertPromptAttached.call(
+        worker,
+        {} as Page,
+        "expected prompt text",
+        async checkpoint => { captured.push(checkpoint); },
+      ),
+    ).rejects.toThrow(ChatGptPromptAttachmentIntegrityError);
+
+    expect(captured).toEqual(["prompt-attachment-mismatch-detected"]);
+  } finally {
+    Date.now = realDateNow;
+  }
+});
+
 test("large Markdown-rich context uses one plain-text editing command before exact verification", async () => {
   const prompt = [
     "Act as the model backend for the Codex task encoded below.",

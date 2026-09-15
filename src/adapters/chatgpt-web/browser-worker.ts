@@ -2925,6 +2925,7 @@ export class ChatGptBrowserWorker {
   private async assertPromptAttached(
     page: Page,
     prompt: string,
+    captureDiagnostic?: (checkpoint: string) => Promise<void>,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     const deadline = Date.now() + 10_000;
@@ -2941,6 +2942,10 @@ export class ChatGptBrowserWorker {
     }
     throwIfPromptAttachmentAborted(abortSignal);
     const commonPrefix = this.promptEquivalentPrefixLength(prompt, observed);
+    // The mismatched composer content is only observable right here -- attachPrompt's own catch
+    // block clears composer state as soon as this error propagates, so any later diagnostic
+    // capture (e.g. the outer retry's own checkpoint) only ever sees an already-emptied composer.
+    await captureDiagnostic?.("prompt-attachment-mismatch-detected");
     throw new ChatGptPromptAttachmentIntegrityError(
       `ChatGPT composer did not preserve the complete prompt (expectedChars=${prompt.length}, actualChars=${observed.length}, commonPrefixChars=${commonPrefix})`,
     );
@@ -3278,7 +3283,7 @@ export class ChatGptBrowserWorker {
           await setChatGptThinkMode(composer.locator("xpath=ancestor::form[1]"), true, captureDiagnostic, abortSignal);
         }
         await this.insertPromptText(page, prompt, abortSignal);
-        await this.assertPromptAttached(page, prompt, abortSignal);
+        await this.assertPromptAttached(page, prompt, captureDiagnostic, abortSignal);
         return;
       }
       const selectedComposer = await this.selectConnector(
@@ -3300,7 +3305,7 @@ export class ChatGptBrowserWorker {
         timeout: CHATGPT_CONNECTOR_ACTION_TIMEOUT_MS,
       });
       await this.insertPromptText(page, ` ${prompt}`, abortSignal);
-      await this.assertPromptAttached(page, prompt, abortSignal);
+      await this.assertPromptAttached(page, prompt, captureDiagnostic, abortSignal);
     } catch (error) {
       if (!composerMutationStarted || error instanceof ChatGptPersistentBrowserStateError) throw error;
       try {
