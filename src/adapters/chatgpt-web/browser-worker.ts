@@ -1768,9 +1768,15 @@ class ChatGptBrowserDiagnostics {
         }) => {
           // Real ChatGptPromptAttachmentIntegrityError occurrences have shown the mismatch starting
           // exactly on a composer line whose only unusual character was a literal "-" (pointing at
-          // dash autocorrect) or, separately, a `git status --short` line's single space (pointing
-          // at a non-breaking-space substitution instead). This closed, non-sensitive whitelist
-          // identifies exactly which substitute shows up, covering both known families so far.
+          // dash autocorrect) or, separately, a `git status --short` line's single space (pointing at
+          // a non-breaking-space substitution instead -- distinct from promptCodeUnitEquivalent's
+          // existing NBSP allowance, which only forgives NBSP within a multi-space run, not a lone
+          // substituted space). This closed, non-sensitive whitelist identifies exactly which
+          // substitute shows up. The dash family is confirmed by two independent occurrences; the
+          // space-substitution family, by one so far. Zero-width space is included too, though it's
+          // really an *insertion* (renders as nothing) rather than a same-width substitution -- a true
+          // insertion would show up as a length mismatch in promptCodeUnitEquivalent, not a
+          // same-length content divergence like the dash/space cases.
           const suspectSubstituteChars = new Set([
             "‐", "‑", "‒", "–", "—", "―", "−",
             "‘", "’", "“", "”", "…",
