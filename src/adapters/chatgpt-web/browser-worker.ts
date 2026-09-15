@@ -1766,6 +1766,14 @@ class ChatGptBrowserDiagnostics {
           completionActionSelector,
           appName,
         }) => {
+          // Two real ChatGptPromptAttachmentIntegrityError occurrences both showed the mismatch
+          // starting exactly on a composer line whose only unusual character was a literal "-",
+          // pointing at the rich-text editor's autocorrect substituting it for a typographic dash.
+          // This closed, non-sensitive whitelist identifies exactly which substitute shows up.
+          const suspectSubstituteChars = new Set([
+            "‐", "‑", "‒", "–", "—", "―", "−",
+            "‘", "’", "“", "”", "…",
+          ]);
           const rendered = (element: Element): boolean => {
             const candidate = element as HTMLElement;
             const style = getComputedStyle(candidate);
@@ -1851,6 +1859,8 @@ class ChatGptBrowserDiagnostics {
                 textChars: (child.textContent ?? "").length,
                 // Counts non-ASCII code points *and* ASCII control characters (e.g. tab), not only non-ASCII.
                 unexpectedCharCount: [...(child.textContent ?? "")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length,
+                // Which whitelisted typographic substitute (if any) shows up -- see suspectSubstituteChars above.
+                suspectSubstitutes: [...(child.textContent ?? "")].filter(char => suspectSubstituteChars.has(char)),
               }))),
               selectedConnectorCount: selectedConnectors.length,
               exactSelectedConnectorCount: selectedConnectors.filter(

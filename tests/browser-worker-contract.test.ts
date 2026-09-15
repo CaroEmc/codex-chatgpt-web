@@ -446,6 +446,30 @@ test("diagnostics capture flags unexpected characters per composer line without 
   expect(workerSource).toContain("[...(child.textContent ?? \"\")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length");
 });
 
+test("diagnostics capture identifies which typographic-substitute character appears on a composer line, from a closed whitelist", () => {
+  // Two real occurrences of ChatGptPromptAttachmentIntegrityError both showed unexpectedCharCount=1
+  // exactly on the two composer lines that legitimately contained a literal "-" (a git diffstat's
+  // deletion marker and its "deletion(-)" summary), with every other line at 0 -- and the mismatch's
+  // reported commonPrefixChars landed exactly at the start of the first such line both times. That
+  // points at ChatGPT's rich-text composer substituting the hyphen for a typographic dash via
+  // autocorrect. This exposes exactly which whitelisted punctuation substitute was found (a closed,
+  // non-sensitive set of dash/quote/ellipsis characters), not the surrounding prompt content, so the
+  // exact substitution can be confirmed and then corrected.
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const unexpectedCharCount = workerSource.indexOf("unexpectedCharCount:");
+  const suspectSubstituteChars = workerSource.indexOf("suspectSubstituteChars", unexpectedCharCount);
+  const suspectSubstitutes = workerSource.indexOf("suspectSubstitutes:", suspectSubstituteChars);
+
+  expect(unexpectedCharCount).toBeGreaterThan(-1);
+  expect(suspectSubstituteChars).toBeGreaterThan(unexpectedCharCount);
+  expect(suspectSubstitutes).toBeGreaterThan(suspectSubstituteChars);
+  // En dash, em dash, minus sign -- the characters "-" is most commonly autocorrected to.
+  expect(workerSource).toContain("–");
+  expect(workerSource).toContain("—");
+  expect(workerSource).toContain("−");
+  expect(workerSource).toContain("[...(child.textContent ?? \"\")].filter(char => suspectSubstituteChars.has(char))");
+});
+
 test("launcher page acquisition proves a nonzero operational viewport before DOM interaction", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
   const connect = workerSource.indexOf("const connection = await connectLauncherBrowserHost(");
