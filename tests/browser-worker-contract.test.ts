@@ -411,6 +411,24 @@ test("integrity-retry submission evidence cannot make prompt-stage settlement un
   expect(evaluateStarted).toBeTrue();
 });
 
+test("diagnostics capture exposes each composer line's real DOM shape for integrity-mismatch debugging", () => {
+  // ChatGptPromptAttachmentIntegrityError has recurred with the exact same commonPrefixChars for
+  // identical content across independent attempts, pointing at a real, reproducible structural
+  // mismatch rather than a timing race -- but every checkpoint's diagnostic JSON only recorded
+  // character counts, not the composer's actual DOM shape. attachedPromptText() reconstructs text
+  // by joining the composer's direct childNodes with "\n", assuming one line per top-level node;
+  // if a line break is instead represented as a <br> within one node, that assumption breaks
+  // silently. This structural capture lets a real occurrence confirm or rule that out.
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const editors = workerSource.indexOf("editors: composers.map(element => ({");
+  const childStructure = workerSource.indexOf("childStructure: composers.map(element =>", editors);
+
+  expect(editors).toBeGreaterThan(-1);
+  expect(childStructure).toBeGreaterThan(editors);
+  expect(workerSource).toContain('child.nodeType === Node.ELEMENT_NODE ? (child as Element).tagName.toLowerCase() : null');
+  expect(workerSource).toContain('(child as Element).querySelectorAll("br").length : 0');
+});
+
 test("launcher page acquisition proves a nonzero operational viewport before DOM interaction", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
   const connect = workerSource.indexOf("const connection = await connectLauncherBrowserHost(");
