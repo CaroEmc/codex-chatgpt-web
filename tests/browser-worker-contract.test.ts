@@ -494,6 +494,35 @@ test("diagnostics whitelist also covers invisible-space substitutes, not only da
   expect(whitelistLiteral).toContain(" ");
 });
 
+test("suspectSubstitutes survives diagnostic persistence by reporting codepoints, not raw characters", () => {
+  // A real occurrence showed suspectSubstitutes as [null] / [null, null] in the persisted JSON --
+  // sanitizeChatGptBrowserDiagnosticState (a "never persist rendered UI text" defense-in-depth pass)
+  // strips every bare string that isn't nested under one of its whitelisted object keys, and array
+  // elements that are raw strings hit exactly that path, becoming `undefined` (serialized as `null`).
+  // The field has been non-functional since it was added. Emitting codepoints (numbers) instead
+  // preserves the diagnostic value -- numbers pass through the sanitizer unchanged -- without
+  // widening the sanitizer's string whitelist for what is still a closed, non-sensitive character set.
+  const dash = "\u2013";
+  const rawCharacterResult = sanitizeChatGptBrowserDiagnosticState({
+    childStructure: [[{ tag: "p", suspectSubstitutes: [dash, dash] }]],
+  });
+  // JSON.stringify turns undefined array elements into null -- matching what the real occurrence
+  // actually persisted to disk.
+  expect(JSON.parse(JSON.stringify(rawCharacterResult))).toEqual({
+    childStructure: [[{ tag: "p", suspectSubstitutes: [null, null] }]],
+  });
+
+  const codePointResult = sanitizeChatGptBrowserDiagnosticState({
+    childStructure: [[{ tag: "p", suspectSubstitutes: [dash.codePointAt(0), dash.codePointAt(0)] }]],
+  });
+  expect(codePointResult).toEqual({ childStructure: [[{ tag: "p", suspectSubstitutes: [8211, 8211] }]] });
+
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  expect(workerSource).toContain(
+    '[...(child.textContent ?? "")].filter(char => suspectSubstituteChars.has(char)).map(char => char.codePointAt(0))',
+  );
+});
+
 test("launcher page acquisition proves a nonzero operational viewport before DOM interaction", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
   const connect = workerSource.indexOf("const connection = await connectLauncherBrowserHost(");

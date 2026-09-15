@@ -1867,8 +1867,11 @@ class ChatGptBrowserDiagnostics {
                 textChars: (child.textContent ?? "").length,
                 // Counts non-ASCII code points *and* ASCII control characters (e.g. tab), not only non-ASCII.
                 unexpectedCharCount: [...(child.textContent ?? "")].filter(char => char.codePointAt(0)! > 0x7e || char.codePointAt(0)! < 0x20).length,
-                // Which whitelisted typographic substitute (if any) shows up -- see suspectSubstituteChars above.
-                suspectSubstitutes: [...(child.textContent ?? "")].filter(char => suspectSubstituteChars.has(char)),
+                // Which whitelisted typographic substitute (if any) shows up -- see suspectSubstituteChars
+                // above. Codepoints, not the raw characters: sanitizeChatGptBrowserDiagnosticState strips
+                // every bare string that isn't nested under one of its whitelisted object keys, so a raw
+                // character here would silently persist as null. Numbers pass through unchanged.
+                suspectSubstitutes: [...(child.textContent ?? "")].filter(char => suspectSubstituteChars.has(char)).map(char => char.codePointAt(0)),
               }))),
               selectedConnectorCount: selectedConnectors.length,
               exactSelectedConnectorCount: selectedConnectors.filter(
