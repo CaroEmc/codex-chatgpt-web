@@ -66,8 +66,64 @@ test("the rejection text is the exact literal the model should see", () => {
 test("HITL protocol instructions teach subagent delegation via codex exec, since no MCP subagent tool is available in this transport", () => {
   expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("codex exec");
   expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("no MCP subagent tool is available");
-  // The delegation guidance must itself be issued as an EXEC_REQUEST -- this transport has no
-  // other tool-calling channel -- and must warn that the sub-task starts with no shared context.
   expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("command: codex exec");
   expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("no memory of this conversation");
+  // Never invite --dangerously-bypass-approvals-and-sandbox for a delegated sub-task.
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("Never add --dangerously-bypass-approvals-and-sandbox");
+});
+
+test("delegation guidance warns about the single-line command field and the shell-quoting risk of a free-text prompt", () => {
+  // The command field is one raw line (FIELD_LINE matches ^command:\\s*(.*)$); a prompt with an
+  // embedded newline is silently truncated by parseExecRequest, and one with an embedded backtick
+  // or $(...) is shell-interpolated at spawn time if double-quoted. The instructions must steer the
+  // model away from both failure modes instead of silently producing broken or unsafe commands.
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("one line");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("single quotes");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("double quotes");
+});
+
+test("delegation guidance warns about the exec timeout and output cap so sub-tasks are scoped to survive both", () => {
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("60-second");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("10KB");
+});
+
+test("the rejection text is the exact literal the model should see", () => {
+  expect(EXEC_REJECTED_TEXT).toBe("User rejected execution.");
+});
+
+test("every literal EXEC_REQUEST marker in the instructions is part of a real matched block, never bare in explanatory prose", () => {
+  // createHitlEmitFilter buffers all subsequent streamed text once it sees a bare "[EXEC_REQUEST"
+  // substring, releasing it only once a complete block parses or the substring stops matching --
+  // so teaching the model to write that bracketed token in ordinary prose (not as an actual
+  // protocol block) risks withholding the rest of a real answer from the user.
+  const openCount = DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS.split("[EXEC_REQUEST]").length - 1;
+  const closeCount = DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS.split("[/EXEC_REQUEST]").length - 1;
+  expect(openCount).toBe(closeCount);
+});
+
+test("a delegation command line shaped exactly like the instructed example round-trips through parseExecRequest", () => {
+  const text = [
+    "[EXEC_REQUEST]",
+    "command: codex exec -C /repo -s read-only --skip-git-repo-check -o /tmp/subagent-report.txt 'Review the diff in scripts/foo.py and report Critical/Important/Minor issues.'",
+    "reason: Delegate an independent review since no MCP subagent tool is available",
+    "[/EXEC_REQUEST]",
+  ].join("\n");
+  const parsed = parseExecRequest(text);
+  expect(parsed?.command).toBe(
+    "codex exec -C /repo -s read-only --skip-git-repo-check -o /tmp/subagent-report.txt 'Review the diff in scripts/foo.py and report Critical/Important/Minor issues.'",
+  );
+});
+
+test("documents the existing single-line limit: a command value with an embedded newline is silently truncated to its first line", () => {
+  // parseExecRequest only recognizes command/cwd/reason lines and drops every other line via
+  // `continue` -- so a multi-line prompt embedded in `command:` is not an error, just silent data
+  // loss. This is why the delegation instructions insist on a single-line, single-quoted prompt
+  // rather than relying on the parser to support more than that.
+  const text = [
+    "[EXEC_REQUEST]",
+    "command: codex exec -C /repo 'first line of the prompt",
+    "second line is silently dropped, not part of command'",
+    "[/EXEC_REQUEST]",
+  ].join("\n");
+  expect(parseExecRequest(text)?.command).toBe("codex exec -C /repo 'first line of the prompt");
 });
