@@ -2118,11 +2118,19 @@ export class ChatGptBrowserWorker {
   private constructor(private readonly config: ResolvedBrowserConfig) {}
 
   /**
-   * Lexical/contenteditable may preserve runs of ASCII spaces by exposing some of them as NBSP
-   * through DOM textContent. Treat that DOM-only representation as equivalent only when the
-   * expected U+0020 belongs to a multi-space run. Single spaces, tabs, newlines, intentional
-   * expected NBSP characters, and every other mutation remain exact and fail closed.
+   * ChatGPT's rich-text composer performs two confirmed, same-width typographic substitutions on
+   * pasted text: it may render an ASCII space as NBSP (Lexical's whitespace-preservation, seen both
+   * within multi-space runs and, per real occurrence traceId 6ee7bb84c46e, on an isolated single
+   * space), and it may autocorrect a lone ASCII hyphen into a typographic dash (seen in two
+   * separate real occurrences). Both are cosmetic-only and directional: only expected-ASCII /
+   * observed-substitute is tolerated, never the reverse, and every other mutation -- tabs,
+   * newlines, quotes/ellipsis (also autocorrect targets, but never yet confirmed live), or any
+   * other divergence -- remains exact and fails closed.
    */
+  private static readonly PROMPT_DASH_SUBSTITUTES = new Set([
+    "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015", "\u2212",
+  ]);
+
   private promptCodeUnitEquivalent(
     expected: string,
     observed: string,
@@ -2132,9 +2140,12 @@ export class ChatGptBrowserWorker {
     const observedUnit = observed[index];
 
     if (expectedUnit === observedUnit) return true;
-    if (expectedUnit !== " " || observedUnit !== "\u00A0") return false;
+    if (expectedUnit === " " && observedUnit === "\u00A0") return true;
+    if (expectedUnit === "-" && ChatGptBrowserWorker.PROMPT_DASH_SUBSTITUTES.has(observedUnit)) {
+      return true;
+    }
 
-    return expected[index - 1] === " " || expected[index + 1] === " ";
+    return false;
   }
 
   private promptTextEquivalent(

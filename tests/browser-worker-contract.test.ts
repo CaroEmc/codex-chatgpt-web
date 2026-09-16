@@ -1057,7 +1057,7 @@ test("active composer resolution waits for exactly one visible editor", async ()
 
 test("prompt verification accepts Lexical NBSP preservation without weakening other mismatches", async () => {
   // Lexical may preserve indentation as alternating NBSP and ASCII spaces while keeping the same
-  // UTF-16 length; that representation is equivalent only for whitespace runs.
+  // UTF-16 length; that representation is equivalent even for a single, isolated ASCII space.
   const expected = `prefix C\\n${" ".repeat(24)}suffix`;
   const observed = `prefix C\\n${"\u00A0 ".repeat(12)}suffix`;
 
@@ -1074,10 +1074,22 @@ test("prompt verification accepts Lexical NBSP preservation without weakening ot
 
   expect(promptTextEquivalent.call(worker, expected, observed)).toBeTrue();
 
-  // The allowance is intentionally directional and restricted to repeated ASCII-space runs.
+  // The allowance is intentionally directional: expected ASCII space, observed NBSP -- whether or
+  // not it's part of a multi-space run. Confirmed live by a real occurrence (traceId 6ee7bb84c46e)
+  // where a single separator space in a `git status --short` line was substituted with NBSP.
   expect(promptTextEquivalent.call(worker, "a  b", "a\u00A0 b")).toBeTrue();
-  expect(promptTextEquivalent.call(worker, "a b", "a\u00A0b")).toBeFalse();
+  expect(promptTextEquivalent.call(worker, "a b", "a\u00A0b")).toBeTrue();
   expect(promptTextEquivalent.call(worker, "a\u00A0b", "a b")).toBeFalse();
+
+  // Confirmed live by two occurrences: ChatGPT's composer autocorrects a lone ASCII hyphen into a
+  // typographic dash. Tolerate exactly the closed whitelist already used for diagnostics.
+  expect(promptTextEquivalent.call(worker, "a-b", "a\u2010b")).toBeTrue(); // hyphen
+  expect(promptTextEquivalent.call(worker, "a-b", "a\u2013b")).toBeTrue(); // en dash
+  expect(promptTextEquivalent.call(worker, "a-b", "a\u2014b")).toBeTrue(); // em dash
+  expect(promptTextEquivalent.call(worker, "a\u2013b", "a-b")).toBeFalse(); // directional only
+  // Quotes/ellipsis are on the diagnostic whitelist but never confirmed by a real occurrence --
+  // they stay fail closed until they are.
+  expect(promptTextEquivalent.call(worker, "a'b", "a\u2019b")).toBeFalse();
 
   // Other whitespace and same-length text mutations must remain fail closed.
   expect(promptTextEquivalent.call(worker, "a b", "a\tb")).toBeFalse();
