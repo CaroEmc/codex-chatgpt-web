@@ -11,10 +11,12 @@ export interface RawExecRequest {
 
 const OUTPUT_CAP_BYTES = 10 * 1024;
 /** A delegated `codex exec` sub-task (see DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS) observed 60,886ms in
- * a real occurrence -- 886ms past the previous 60,000ms bound. That report survived only because
- * the caller reads it back from disk via a separate EXEC_REQUEST rather than this command's own
- * stdout; a real margin above the worst observed case avoids repeating that near-miss. */
-export const HITL_EXEC_TIMEOUT_MS = 120_000;
+ * one real occurrence, then 290,779ms in another -- doubling the previous 60,000ms bound to
+ * 120,000ms already proved insufficient once. Review duration varies a lot with scope rather than
+ * clustering near one worst case, so this channel (already human-approval-gated -- nothing runs
+ * unsupervised, and the human already watched the command start) gets a generous ceiling instead
+ * of incremental re-bumps on every larger real occurrence. */
+export const HITL_EXEC_TIMEOUT_MS = 600_000;
 
 /** `workspaceCwd` is provider-level config (see `hitlWorkspaceCwd`), not resolved per-request:
  * the Responses API request this daemon receives from Codex carries no workspace/cwd field, so

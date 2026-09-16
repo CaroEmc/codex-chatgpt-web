@@ -111,12 +111,14 @@ test("an omitted cwd defaults to the workspace root", async () => {
 });
 
 test("the exec timeout has enough margin for a delegated codex exec sub-task, not just a plain shell command", () => {
-  // A real occurrence (nested `codex exec` review, delegated per the HITL protocol's subagent
-  // guidance) completed in 60,886ms -- 886ms past the prior 60,000ms timeout. It survived only
-  // because runApprovedCommand's caller reads the -o report file back via a *second*, independent
-  // EXEC_REQUEST rather than relying on this command's own stdout, so the near-miss didn't lose
-  // data this time. A real margin above the worst observed case, not just past it, avoids repeating
-  // that near-miss on the next slightly-slower run.
-  expect(HITL_EXEC_TIMEOUT_MS).toBe(120_000);
-  expect(HITL_EXEC_TIMEOUT_MS).toBeGreaterThan(60_886);
+  // Two real occurrences of a delegated `codex exec` sub-task (per the HITL protocol's subagent
+  // guidance) show wildly different durations: 60,886ms, then 290,779ms -- a genuine review's
+  // length varies a lot with scope, not a single worst case to pad slightly. Doubling the timeout
+  // once already proved insufficient (the second occurrence blew past the 120,000ms bound it
+  // motivated). The channel is human-approval-gated -- nothing runs unsupervised, and the human
+  // already watched the command start -- so a generous ceiling costs little for the ordinary short
+  // commands that dominate this channel, while giving real headroom for multi-minute delegated
+  // reviews instead of incrementally re-bumping on every larger real occurrence.
+  expect(HITL_EXEC_TIMEOUT_MS).toBe(600_000);
+  expect(HITL_EXEC_TIMEOUT_MS).toBeGreaterThan(290_779);
 });
