@@ -109,6 +109,49 @@ that option clicks **Allow once**, never a permanent grant.
 </details>
 
 <details>
+<summary><strong>Browser-only local exec (HITL)</strong></summary>
+
+<a id="hitl"></a>
+
+When the MCP tunnel isn't an option (e.g. it's blocked on your network), `--hitl` lets a
+browser-only session run local shell commands directly from the terminal instead, gated by your
+explicit approval on every single command:
+
+```bash
+codex-chatgpt-web setup --browser-only --acknowledge-unofficial
+codex-chatgpt-web serve --hitl
+```
+
+`--hitl` requires `--browser-only` (full mode already has real tool calls through MCP) and only
+activates in the foreground with an attached TTY — it fails closed (no exec) under any other
+condition, such as running as a background service.
+
+Once active, the model can ask to run a command by emitting an `[EXEC_REQUEST]` block; the
+terminal shows an **AI EXECUTION PROPOSAL** and waits for you to press Enter/`y` to run it, `n`/Esc
+to reject, or `c` to edit the command first. Nothing executes without that per-command approval.
+
+There is no MCP subagent tool available over this transport, so the model is instead instructed to
+delegate independent sub-tasks by running `codex exec` non-interactively as an approved shell
+command (e.g. a scoped code review of one file), reading the result back with a second
+`[EXEC_REQUEST]`.
+
+**Current limitations:**
+
+- **Write-capable, not sandboxed by content.** The exec channel runs whatever command you approve
+  — including destructive ones (`rm`, `git commit`, `sed -i`, …) — with real effects on your
+  filesystem. The only built-in restrictions are that commands are confined to the configured
+  workspace directory, and every single command needs your explicit approval; there is no
+  automatic read-only enforcement or command blocklist.
+- **10-minute timeout, 10KB output cap per command.** Long-running or chatty commands are cut off
+  and truncated; scope delegated sub-tasks narrowly (one file or question, not a full audit).
+- **Single-line commands only.** The `command:` field is parsed as one line, so a delegated task
+  prompt must be single-quoted and free of embedded newlines or single quotes.
+- **Unverified signal propagation.** The timeout sends SIGTERM to the command's shell process; whether
+  that reliably reaches everything a nested `codex exec` spawns hasn't been independently confirmed.
+
+</details>
+
+<details>
 <summary><strong>Diagnostics & subagents</strong></summary>
 
 <a id="operations"></a>
