@@ -1111,7 +1111,6 @@ test("prompt verification accepts Lexical NBSP preservation without weakening ot
   expect(promptTextEquivalent.call(worker, "a b", "a\tb")).toBeFalse(); // directional only
 
   // Other whitespace and same-length text mutations must remain fail closed.
-  expect(promptTextEquivalent.call(worker, "a b", "a\tb")).toBeFalse();
   expect(promptTextEquivalent.call(worker, "a\nb", "a b")).toBeFalse();
   expect(promptTextEquivalent.call(worker, "abc", "abd")).toBeFalse();
   expect(promptTextEquivalent.call(worker, "abc", "ab")).toBeFalse();

@@ -2134,10 +2134,14 @@ export class ChatGptBrowserWorker {
    * trailing tab had nothing after it in that paragraph) -- the same trailing-whitespace
    * preservation behavior as the space case, just triggered by tab. A tab followed by real content
    * was preserved literally elsewhere in that same occurrence and caused no mismatch, so only
-   * expected-tab/observed-NBSP needs tolerating, not tab in general. All three are cosmetic-only and
-   * directional: only expected-ASCII / observed-substitute is tolerated, never the reverse, and
-   * every other mutation -- newlines, quotes/ellipsis (also autocorrect targets, but never yet
-   * confirmed live), or any other divergence -- remains exact and fails closed.
+   * expected-tab/observed-NBSP needs tolerating, not tab in general -- though, like the space case
+   * before it (originally scoped to multi-space runs, later widened to any single space), the code
+   * below tolerates expected-tab/observed-NBSP at any index, not only a trailing one; a
+   * paragraph-position-scoped check would need paragraph boundaries this flat string comparison
+   * doesn't have. All three are cosmetic-only and directional: only expected-ASCII /
+   * observed-substitute is tolerated, never the reverse, and every other mutation -- newlines,
+   * quotes/ellipsis (also autocorrect targets, but never yet confirmed live), or any other
+   * divergence -- remains exact and fails closed.
    */
   private static readonly PROMPT_DASH_SUBSTITUTES = new Set([
     "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015", "\u2212",
