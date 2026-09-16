@@ -494,23 +494,6 @@ test("diagnostics whitelist also covers invisible-space substitutes, not only da
   expect(whitelistLiteral).toContain(" ");
 });
 
-test("diagnostics whitelist also covers markdown bullet-list rendering, not only dash/space substitution", () => {
-  // A real occurrence delegating a large system-prompt turn (Codex's own base instructions, which
-  // contain 23 markdown "- " bullet lines) showed unexpectedCharCount=3 with only 2 codepoints in
-  // suspectSubstitutes on nearly every affected paragraph -- one substitution per line went
-  // uncounted. ChatGPT's composer is a strong candidate for rendering a markdown "- " list prefix
-  // as a literal bullet character (U+2022) while keeping it in textContent as plain "p" paragraphs
-  // (not a real <ul>/<li> the diagnostic would see as a different tag), same length as "- ".
-  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
-  const declaration = workerSource.indexOf("const suspectSubstituteChars = new Set(");
-  const declarationEnd = workerSource.indexOf("]);", declaration);
-  const whitelistLiteral = workerSource.slice(declaration, declarationEnd);
-
-  expect(declaration).toBeGreaterThan(-1);
-  expect(declarationEnd).toBeGreaterThan(declaration);
-  expect(whitelistLiteral).toContain("•");
-});
-
 test("suspectSubstitutes survives diagnostic persistence by reporting codepoints, not raw characters", () => {
   // A real occurrence showed suspectSubstitutes as [null] / [null, null] in the persisted JSON --
   // sanitizeChatGptBrowserDiagnosticState (a "never persist rendered UI text" defense-in-depth pass)
@@ -1116,6 +1099,16 @@ test("prompt verification accepts Lexical NBSP preservation without weakening ot
   expect(
     promptTextEquivalent.call(worker, "M docs/x.md-note", "M\u00a0docs/x.md\u2013note"),
   ).toBeTrue();
+
+  // Confirmed live (traceId 7252e149a299): a `nl -ba` blank line reconstructs as "   313\t" -- a
+  // trailing tab with nothing after it in that paragraph. Reconstructing the diagnostic counts for
+  // that exact paragraph (unexpectedCharCount=3, all three suspectSubstitutes=160) is only
+  // consistent with the composer rendering that *trailing* tab as NBSP too, the same
+  // trailing-whitespace-preservation behavior that already motivates expected-space/observed-NBSP.
+  // A mid-line tab (followed by real content) was preserved literally on every other line in that
+  // occurrence and caused no mismatch, so only expected-tab/observed-NBSP needs tolerating here.
+  expect(promptTextEquivalent.call(worker, "a\tb", "a b")).toBeTrue();
+  expect(promptTextEquivalent.call(worker, "a b", "a\tb")).toBeFalse(); // directional only
 
   // Other whitespace and same-length text mutations must remain fail closed.
   expect(promptTextEquivalent.call(worker, "a b", "a\tb")).toBeFalse();

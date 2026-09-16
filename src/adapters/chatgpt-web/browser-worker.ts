@@ -1778,15 +1778,16 @@ class ChatGptBrowserDiagnostics {
           // insertion would show up as a length mismatch in promptCodeUnitEquivalent, not a
           // same-length content divergence like the dash/space cases. A large system-prompt turn
           // (Codex's own base instructions, containing markdown "- " bullet lines) showed one
-          // uncounted character per affected paragraph beyond the NBSPs already found -- a strong
-          // candidate is the composer rendering a markdown bullet prefix as a literal "•" while
-          // still exposing it as ordinary paragraph textContent. Unconfirmed pending a real occurrence
-          // that decodes it via suspectSubstitutes.
+          // uncounted character per affected paragraph beyond the NBSPs already found; a follow-up
+          // occurrence ruled out the leading hypothesis for that gap (a literal bullet character
+          // never appeared in suspectSubstitutes) and instead traced a different, confirmed cause: a
+          // tab that is the last character of a composer paragraph renders as NBSP (see
+          // promptCodeUnitEquivalent). The original bullet paragraphs' extra uncounted character
+          // remains unexplained.
           const suspectSubstituteChars = new Set([
             "‐", "‑", "‒", "–", "—", "―", "−",
             "‘", "’", "“", "”", "…",
             " ", " ", "​", " ",
-            "•",
           ]);
           const rendered = (element: Element): boolean => {
             const candidate = element as HTMLElement;
@@ -2124,14 +2125,19 @@ export class ChatGptBrowserWorker {
   private constructor(private readonly config: ResolvedBrowserConfig) {}
 
   /**
-   * ChatGPT's rich-text composer performs two confirmed, same-width typographic substitutions on
+   * ChatGPT's rich-text composer performs three confirmed, same-width typographic substitutions on
    * pasted text: it may render an ASCII space as NBSP (Lexical's whitespace-preservation, seen both
    * within multi-space runs and, per real occurrence traceId 6ee7bb84c46e, on an isolated single
-   * space), and it may autocorrect a lone ASCII hyphen into a typographic dash (seen in two
-   * separate real occurrences). Both are cosmetic-only and directional: only expected-ASCII /
-   * observed-substitute is tolerated, never the reverse, and every other mutation -- tabs,
-   * newlines, quotes/ellipsis (also autocorrect targets, but never yet confirmed live), or any
-   * other divergence -- remains exact and fails closed.
+   * space), it may autocorrect a lone ASCII hyphen into a typographic dash (seen in two separate
+   * real occurrences), and it may render a tab as NBSP when that tab is the last character of a
+   * composer paragraph (per real occurrence traceId 7252e149a299, a `nl -ba` blank line whose
+   * trailing tab had nothing after it in that paragraph) -- the same trailing-whitespace
+   * preservation behavior as the space case, just triggered by tab. A tab followed by real content
+   * was preserved literally elsewhere in that same occurrence and caused no mismatch, so only
+   * expected-tab/observed-NBSP needs tolerating, not tab in general. All three are cosmetic-only and
+   * directional: only expected-ASCII / observed-substitute is tolerated, never the reverse, and
+   * every other mutation -- newlines, quotes/ellipsis (also autocorrect targets, but never yet
+   * confirmed live), or any other divergence -- remains exact and fails closed.
    */
   private static readonly PROMPT_DASH_SUBSTITUTES = new Set([
     "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015", "\u2212",
@@ -2146,7 +2152,7 @@ export class ChatGptBrowserWorker {
     const observedUnit = observed[index];
 
     if (expectedUnit === observedUnit) return true;
-    if (expectedUnit === " " && observedUnit === "\u00A0") return true;
+    if ((expectedUnit === " " || expectedUnit === "\t") && observedUnit === "\u00A0") return true;
     if (expectedUnit === "-" && ChatGptBrowserWorker.PROMPT_DASH_SUBSTITUTES.has(observedUnit)) {
       return true;
     }
