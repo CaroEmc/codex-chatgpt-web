@@ -1776,11 +1776,17 @@ class ChatGptBrowserDiagnostics {
           // space-substitution family, by one so far. Zero-width space is included too, though it's
           // really an *insertion* (renders as nothing) rather than a same-width substitution -- a true
           // insertion would show up as a length mismatch in promptCodeUnitEquivalent, not a
-          // same-length content divergence like the dash/space cases.
+          // same-length content divergence like the dash/space cases. A large system-prompt turn
+          // (Codex's own base instructions, containing markdown "- " bullet lines) showed one
+          // uncounted character per affected paragraph beyond the NBSPs already found -- a strong
+          // candidate is the composer rendering a markdown bullet prefix as a literal "•" while
+          // still exposing it as ordinary paragraph textContent. Unconfirmed pending a real occurrence
+          // that decodes it via suspectSubstitutes.
           const suspectSubstituteChars = new Set([
             "‐", "‑", "‒", "–", "—", "―", "−",
             "‘", "’", "“", "”", "…",
             " ", " ", "​", " ",
+            "•",
           ]);
           const rendered = (element: Element): boolean => {
             const candidate = element as HTMLElement;

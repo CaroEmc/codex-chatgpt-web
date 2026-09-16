@@ -494,6 +494,23 @@ test("diagnostics whitelist also covers invisible-space substitutes, not only da
   expect(whitelistLiteral).toContain(" ");
 });
 
+test("diagnostics whitelist also covers markdown bullet-list rendering, not only dash/space substitution", () => {
+  // A real occurrence delegating a large system-prompt turn (Codex's own base instructions, which
+  // contain 23 markdown "- " bullet lines) showed unexpectedCharCount=3 with only 2 codepoints in
+  // suspectSubstitutes on nearly every affected paragraph -- one substitution per line went
+  // uncounted. ChatGPT's composer is a strong candidate for rendering a markdown "- " list prefix
+  // as a literal bullet character (U+2022) while keeping it in textContent as plain "p" paragraphs
+  // (not a real <ul>/<li> the diagnostic would see as a different tag), same length as "- ".
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  const declaration = workerSource.indexOf("const suspectSubstituteChars = new Set(");
+  const declarationEnd = workerSource.indexOf("]);", declaration);
+  const whitelistLiteral = workerSource.slice(declaration, declarationEnd);
+
+  expect(declaration).toBeGreaterThan(-1);
+  expect(declarationEnd).toBeGreaterThan(declaration);
+  expect(whitelistLiteral).toContain("•");
+});
+
 test("suspectSubstitutes survives diagnostic persistence by reporting codepoints, not raw characters", () => {
   // A real occurrence showed suspectSubstitutes as [null] / [null, null] in the persisted JSON --
   // sanitizeChatGptBrowserDiagnosticState (a "never persist rendered UI text" defense-in-depth pass)
