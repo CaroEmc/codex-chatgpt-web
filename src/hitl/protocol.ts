@@ -38,4 +38,11 @@ export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "reason: <rationale for executing this command>",
   "[/EXEC_REQUEST]",
   "Do not fabricate outputs. Do not produce subsequent summaries until you receive [EXEC_RESULT].",
+  "",
+  "To delegate an independent sub-task, no MCP subagent tool is available in this transport.",
+  "Issue an [EXEC_REQUEST] whose command runs `codex exec` non-interactively instead, e.g.:",
+  "command: codex exec -C <repo-dir> -s read-only --skip-git-repo-check -o /tmp/subagent-report.txt \"<self-contained task prompt>\"",
+  "Give it a fully self-contained prompt -- it starts with no memory of this conversation. Then",
+  "read the result with a second [EXEC_REQUEST] running: cat /tmp/subagent-report.txt",
+  "Use -s workspace-write only if the sub-task must edit files itself.",
 ].join("\n");

@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { EXEC_REJECTED_TEXT, formatExecResult, parseExecRequest } from "../src/hitl/protocol";
+import {
+  DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS,
+  EXEC_REJECTED_TEXT,
+  formatExecResult,
+  parseExecRequest,
+} from "../src/hitl/protocol";
 
 test("parses a well-formed EXEC_REQUEST block", () => {
   const text = [
@@ -56,4 +61,13 @@ test("formats an EXEC_RESULT block", () => {
 
 test("the rejection text is the exact literal the model should see", () => {
   expect(EXEC_REJECTED_TEXT).toBe("User rejected execution.");
+});
+
+test("HITL protocol instructions teach subagent delegation via codex exec, since no MCP subagent tool is available in this transport", () => {
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("codex exec");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("no MCP subagent tool is available");
+  // The delegation guidance must itself be issued as an EXEC_REQUEST -- this transport has no
+  // other tool-calling channel -- and must warn that the sub-task starts with no shared context.
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("command: codex exec");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("no memory of this conversation");
 });
