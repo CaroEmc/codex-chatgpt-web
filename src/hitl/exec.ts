@@ -10,7 +10,11 @@ export interface RawExecRequest {
 }
 
 const OUTPUT_CAP_BYTES = 10 * 1024;
-const TIMEOUT_MS = 60_000;
+/** A delegated `codex exec` sub-task (see DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS) observed 60,886ms in
+ * a real occurrence -- 886ms past the previous 60,000ms bound. That report survived only because
+ * the caller reads it back from disk via a separate EXEC_REQUEST rather than this command's own
+ * stdout; a real margin above the worst observed case avoids repeating that near-miss. */
+export const HITL_EXEC_TIMEOUT_MS = 120_000;
 
 /** `workspaceCwd` is provider-level config (see `hitlWorkspaceCwd`), not resolved per-request:
  * the Responses API request this daemon receives from Codex carries no workspace/cwd field, so
@@ -23,7 +27,7 @@ function resolveWorkspaceCwd(request: RawExecRequest, workspaceCwd: string): str
 
 function spawnAndCapture(command: string, cwd: string): Promise<{ exitCode: number; output: string }> {
   return new Promise(resolvePromise => {
-    const child = spawn(command, { cwd, shell: true, timeout: TIMEOUT_MS });
+    const child = spawn(command, { cwd, shell: true, timeout: HITL_EXEC_TIMEOUT_MS });
     let output = "";
     let timedOut = false;
     const append = (chunk: Buffer) => {
@@ -36,7 +40,7 @@ function spawnAndCapture(command: string, cwd: string): Promise<{ exitCode: numb
     child.on("close", (code, signal) => {
       if (signal === "SIGTERM" && code === null) timedOut = true;
       const truncated = output.slice(0, OUTPUT_CAP_BYTES);
-      const note = timedOut ? `${truncated}\n[truncated: command timed out after ${TIMEOUT_MS}ms]` : truncated;
+      const note = timedOut ? `${truncated}\n[truncated: command timed out after ${HITL_EXEC_TIMEOUT_MS}ms]` : truncated;
       resolvePromise({ exitCode: timedOut ? 124 : (code ?? 1), output: note });
     });
   });

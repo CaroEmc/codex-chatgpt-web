@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hitl/approval";
 import { EXEC_REJECTED_TEXT } from "../src/hitl/protocol";
-import { runApprovedCommand } from "../src/hitl/exec";
+import { HITL_EXEC_TIMEOUT_MS, runApprovedCommand } from "../src/hitl/exec";
 
 class FixedGateway implements ApprovalGateway {
   seen: ExecProposal[] = [];
@@ -108,4 +108,15 @@ test("an omitted cwd defaults to the workspace root", async () => {
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
+});
+
+test("the exec timeout has enough margin for a delegated codex exec sub-task, not just a plain shell command", () => {
+  // A real occurrence (nested `codex exec` review, delegated per the HITL protocol's subagent
+  // guidance) completed in 60,886ms -- 886ms past the prior 60,000ms timeout. It survived only
+  // because runApprovedCommand's caller reads the -o report file back via a *second*, independent
+  // EXEC_REQUEST rather than relying on this command's own stdout, so the near-miss didn't lose
+  // data this time. A real margin above the worst observed case, not just past it, avoids repeating
+  // that near-miss on the next slightly-slower run.
+  expect(HITL_EXEC_TIMEOUT_MS).toBe(120_000);
+  expect(HITL_EXEC_TIMEOUT_MS).toBeGreaterThan(60_886);
 });

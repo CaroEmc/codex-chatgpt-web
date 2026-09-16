@@ -45,7 +45,7 @@ export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "The command field is exactly one line, so the task prompt must also fit on that one line:",
   "wrap it in single quotes (never double quotes -- those let the shell expand backticks and",
   "$(...) inside your own prompt text), keep it free of embedded single quotes, and keep it short:",
-  "the command has a 60-second timeout and its output is capped at 10KB, so scope the sub-task",
+  "the command has a 120-second timeout and its output is capped at 10KB, so scope the sub-task",
   "narrowly (e.g. one file or one question, not a full audit) and tell it to report only a brief",
   "verdict. Give it a fully self-contained prompt -- it starts with no memory of this conversation.",
   "Never add --dangerously-bypass-approvals-and-sandbox to this command.",

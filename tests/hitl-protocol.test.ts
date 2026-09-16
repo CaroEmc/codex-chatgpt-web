@@ -5,6 +5,7 @@ import {
   formatExecResult,
   parseExecRequest,
 } from "../src/hitl/protocol";
+import { HITL_EXEC_TIMEOUT_MS } from "../src/hitl/exec";
 
 test("parses a well-formed EXEC_REQUEST block", () => {
   const text = [
@@ -83,7 +84,10 @@ test("delegation guidance warns about the single-line command field and the shel
 });
 
 test("delegation guidance warns about the exec timeout and output cap so sub-tasks are scoped to survive both", () => {
-  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("60-second");
+  // Anchored to the real constant, not a hardcoded number, so the instructions can't silently
+  // drift out of sync with the actual timeout the next time it changes.
+  expect(HITL_EXEC_TIMEOUT_MS % 1000).toBe(0);
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(`${HITL_EXEC_TIMEOUT_MS / 1000}-second`);
   expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("10KB");
 });
 
