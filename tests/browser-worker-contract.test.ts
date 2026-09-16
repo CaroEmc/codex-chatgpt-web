@@ -1091,11 +1091,34 @@ test("prompt verification accepts Lexical NBSP preservation without weakening ot
   // they stay fail closed until they are.
   expect(promptTextEquivalent.call(worker, "a'b", "a\u2019b")).toBeFalse();
 
+  // Both allowances apply independently per code unit, including multiple substitutions -- and
+  // different dash characters, and a mix of space and dash substitutions -- within one string.
+  expect(
+    promptTextEquivalent.call(worker, "a-b c-d", "a\u2010b c\u2013d"),
+  ).toBeTrue();
+  expect(
+    promptTextEquivalent.call(worker, "M docs/x.md-note", "M\u00a0docs/x.md\u2013note"),
+  ).toBeTrue();
+
   // Other whitespace and same-length text mutations must remain fail closed.
   expect(promptTextEquivalent.call(worker, "a b", "a\tb")).toBeFalse();
   expect(promptTextEquivalent.call(worker, "a\nb", "a b")).toBeFalse();
   expect(promptTextEquivalent.call(worker, "abc", "abd")).toBeFalse();
   expect(promptTextEquivalent.call(worker, "abc", "ab")).toBeFalse();
+
+  // promptEquivalentPrefixLength shares promptCodeUnitEquivalent and is what diagnostics report as
+  // commonPrefixChars on a real mismatch -- it must walk past tolerated substitutions too, not just
+  // stop at the first one.
+  const promptEquivalentPrefixLength = (ChatGptBrowserWorker.prototype as unknown as {
+    promptEquivalentPrefixLength(expected: string, observed: string): number;
+  }).promptEquivalentPrefixLength;
+
+  expect(
+    promptEquivalentPrefixLength.call(worker, "a-b c–d", "a‐b c–d"),
+  ).toBe(7);
+  expect(
+    promptEquivalentPrefixLength.call(worker, "a-bXc", "a‐bYc"),
+  ).toBe(3);
 
   const assertPromptAttached = (ChatGptBrowserWorker.prototype as unknown as {
     assertPromptAttached(
