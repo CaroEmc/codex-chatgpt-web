@@ -15,7 +15,20 @@ const OUTPUT_CAP_BYTES = 10 * 1024;
  * 120,000ms already proved insufficient once. Review duration varies a lot with scope rather than
  * clustering near one worst case, so this channel (already human-approval-gated -- nothing runs
  * unsupervised, and the human already watched the command start) gets a generous ceiling instead
- * of incremental re-bumps on every larger real occurrence. */
+ * of incremental re-bumps on every larger real occurrence.
+ *
+ * Known open questions, deliberately not chased down without more evidence -- if a future real
+ * occurrence exceeds this bound too, investigate these instead of bumping the number a third time:
+ *  1. Does SIGTERM actually reach the exec'd process at all? `spawn(command, { shell: true,
+ *     timeout })` sends SIGTERM only to the immediate child (the shell), not necessarily anything it
+ *     execs -- the 290,779ms occurrence's process may have outlived the 120,000ms SIGTERM entirely,
+ *     which would mean the timeout wasn't actually bounding anything. If confirmed, the fix is
+ *     `detached: true` plus killing the process group, not a bigger number.
+ *  2. This one constant governs both a `git status` one-liner and a multi-minute delegated review --
+ *     a plain command that genuinely hangs (dead network call, waiting on stdin) now blocks the turn
+ *     for up to 10 minutes before anyone finds out. A per-request timeout (e.g. a field the model can
+ *     set on EXEC_REQUEST, defaulting low, with the delegation instructions asking for a longer one
+ *     explicitly) would let ordinary commands keep failing fast without capping delegated reviews. */
 export const HITL_EXEC_TIMEOUT_MS = 600_000;
 
 /** `workspaceCwd` is provider-level config (see `hitlWorkspaceCwd`), not resolved per-request:
