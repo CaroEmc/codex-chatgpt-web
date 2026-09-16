@@ -162,40 +162,28 @@ test("restores a hook whose end comment moved before unchanged definitions witho
   }
 });
 
-test("verifies and restores a hook whose trust-state table was relocated elsewhere in the file", () => {
-  const original = 'model = "gpt-5.6-sol"\n';
-  const installed = installCodexInterruptHook(original, "/Users/test/.codex/config.toml", {
-    runtimeCommand: ["/opt/runtime"],
-  });
-  const fragment = installed.installed.fragment;
-  const stateIndex = fragment.indexOf("[hooks.state.");
-  const markerIndex = fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
-  const header = fragment.slice(0, stateIndex);
-  const stateBlock = fragment.slice(stateIndex, markerIndex);
-  const marker = fragment.slice(markerIndex);
-
-  // Simulate Codex's own TOML editor grouping every [hooks.state.*] table together elsewhere in
-  // the file, away from the hook definition that owns it -- the layout that corrupted this
-  // integrity check in production, once the state table was no longer adjacent to its hook. Bare
-  // assignments must stay ahead of any table header to remain top-level TOML.
-  const relocated = `${original}${stateBlock}\n${header}${marker}`;
-  expect(Bun.TOML.parse(relocated)).toMatchObject(Bun.TOML.parse(installed.text));
-  verifyCodexInterruptHook(relocated, installed.installed);
-  const restored = restoreCodexInterruptHook(relocated, installed.installed);
-  expect(Bun.TOML.parse(restored)).toEqual({ model: "gpt-5.6-sol" });
-  verifyCodexInterruptHookRestored(restored);
-
-  for (const changed of [
-    // The relocated trust-state table's hash was tampered with.
-    relocated.replace(`trusted_hash = ${JSON.stringify(installed.installed.trustedHash)}`, 'trusted_hash = "sha256:0"'),
-    // A second copy of the relocated trust-state table appeared: ambiguous, refuse it.
-    `${relocated}\n${stateBlock}`,
-    // The hook definition itself was tampered with, independent of where the state table lives.
-    relocated.replace("timeout = 3", "timeout = 2"),
-    // A foreign table was inserted between the header and its end marker; the relocated state
-    // table's own span must not mask this.
-    relocated.replace(MANAGED_INTERRUPT_HOOK_END, `approved = false\n${MANAGED_INTERRUPT_HOOK_END}`),
-  ]) {
-    expect(() => restoreCodexInterruptHook(changed, installed.installed)).toThrow(/changed after setup/);
+test("keeps foreign TOML tables inserted between the managed hook and its trust state", () => {
+  for (const ending of ["\n", "\r\n", "\r"]) {
+    const original = 'model = "example"\n\n[[hooks.Interrupt]]\n[[hooks.Interrupt.hooks]]\ntype = "command"\ncommand = "prior-hook"\n'.replaceAll("\n", ending);
+    const installed = installCodexInterruptHook(original, "/Users/test/.codex/config.toml", { runtimeCommand: ["/opt/runtime"] });
+    const foreign = '\n[marketplaces.claude-plugins-official]\nsource = "unchanged-user-setting"\n\n[mcp_servers.notes]\ncommand = "notes-server"\n\n'.replaceAll("\n", ending);
+    const stateHeader = `[hooks.state.${JSON.stringify(installed.installed.stateKey)}]`;
+    const edited = installed.text.replace(stateHeader, foreign + stateHeader);
+    const outside = installed.text + foreign;
+    expect(Bun.TOML.parse(edited.replace(/\r\n?/g, "\n"))).toEqual(Bun.TOML.parse(outside.replace(/\r\n?/g, "\n")));
+    verifyCodexInterruptHook(edited, installed.installed);
+    const restored = restoreCodexInterruptHook(edited, installed.installed);
+    expect(restored).toBe(original + foreign);
+    const next = installCodexInterruptHook(restored, "/Users/test/.codex/config.toml", { runtimeCommand: ["/opt/new-runtime"] });
+    verifyCodexInterruptHook(next.text, next.installed);
+    expect(restoreCodexInterruptHook(next.text, next.installed)).toBe(restored);
+    for (const changed of [
+      edited.replace("timeout = 3", "timeout = 2"),
+      edited.replace(installed.installed.trustedHash, "sha256:changed"),
+      edited + `\n[hooks.state.${JSON.stringify(installed.installed.stateKey)}.extra]\nchanged = true\n`,
+      edited + '\n[[hooks.Interrupt.hooks]]\ntype = "command"\ncommand = "unexpected-hook"\n',
+    ]) {
+      expect(() => restoreCodexInterruptHook(changed, installed.installed)).toThrow("changed after setup");
+    }
   }
 });

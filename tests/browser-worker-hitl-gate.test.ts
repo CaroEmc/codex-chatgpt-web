@@ -177,7 +177,7 @@ function buildHarness(options: {
     const turn: BrowserTurn = {
       traceId: `hitl-gate-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       modelId: CHATGPT_WEB_MODEL_ID,
-      capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: true },
+      capabilities: { localToolsEnabled: false, solAvailable: true, proAvailable: true, extraHighAvailable: false },
       prepare: async () => ({ text: "Hello Codex", images: [], release() {} }),
       ...partial,
     };

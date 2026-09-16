@@ -136,132 +136,71 @@ function hookTextPattern(text: string): string {
     .join("(?:\\r\\n|\\n|\\r)");
 }
 
-/** The hook definition and its trust-state table are always written contiguously (see
- * `installCodexInterruptHookCommand`), but Codex's own TOML editor groups every `[hooks.state.*]`
- * table together wherever it next rewrites the file, relocating ours away from the hook it
- * belongs to. Splitting them lets `locateCodexInterruptHook` verify each independently instead of
- * requiring an adjacency the underlying editor does not preserve. */
-function splitInstalledFragment(installed: InstalledCodexInterruptHook): { header: string; stateBlock: string } {
-  const marker = installed.fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
-  if (marker < 0) throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
-  const ownedPrefix = installed.fragment.slice(0, marker);
-  const stateIndex = ownedPrefix.indexOf("[hooks.state.");
-  if (stateIndex < 0) throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
-  return {
-    header: ownedPrefix.slice(0, stateIndex).replace(/(?:\r\n|\n|\r)+$/, ""),
-    stateBlock: ownedPrefix.slice(stateIndex),
-  };
-}
-
 function locateCodexInterruptHook(text: string, installed: InstalledCodexInterruptHook): Array<{
   start: number; end: number;
 }> {
   const marker = installed.fragment.indexOf(MANAGED_INTERRUPT_HOOK_END);
   if (marker < 0) throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
   const ownedPrefix = installed.fragment.slice(0, marker);
-  const { header, stateBlock } = splitInstalledFragment(installed);
-
-  // The hook definition (comment through `timeout = 3`) must still appear as one contiguous,
-  // unmodified block. Native config writes normalize CRLF to LF; owned fields must still match
-  // exactly.
-  const headerPattern = new RegExp(hookTextPattern(header), "g");
-  const headerMatch = headerPattern.exec(text);
-  if (!headerMatch || headerPattern.exec(text)) {
+  const stateHeader = /(?:^|\r\n|\n|\r)(\[hooks\.state\.[^\r\n]+\])/.exec(ownedPrefix);
+  if (!stateHeader || stateHeader[1] !== `[hooks.state.${JSON.stringify(installed.stateKey)}]`) {
+    throw new Error("Codex interrupt lifecycle hook journal fragment is invalid");
+  }
+  const stateOffset = stateHeader.index + stateHeader[0].length - stateHeader[1].length;
+  // The native TOML writer can insert unrelated tables between the hook and its trust state.
+  // Locate the two owned definitions separately, retaining exact command/field matching.
+  const ranges = [ownedPrefix.slice(0, stateOffset), ownedPrefix.slice(stateOffset)].map(fragment => {
+    const pattern = new RegExp(hookTextPattern(fragment), "g");
+    const match = pattern.exec(text);
+    if (!match || pattern.exec(text)) {
+      throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
+    }
+    return { start: match.index, end: match.index + match[0].length };
+  });
+  const [hook, state] = ranges;
+  if (!hook || !state || state.start < hook.end) {
     throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
   }
-  const first = headerMatch.index;
-  const headerEnd = first + headerMatch[0].length;
-  if (interruptGroupCount(text.slice(0, first)) !== installed.groupIndex) {
+  if (interruptGroupCount(text.slice(0, hook.start)) !== installed.groupIndex) {
     throw new Error("Codex interrupt lifecycle hook order changed after setup; refusing to overwrite it");
   }
-
-  // The trust-state table can now live anywhere in the file. Its exact two-line text is unique to
-  // this stateKey/hash pair, so requiring exactly one unambiguous match anywhere is exactly as
-  // strict as requiring adjacency was.
-  const statePattern = new RegExp(hookTextPattern(stateBlock), "g");
-  const stateMatches = [...text.matchAll(statePattern)];
-  if (stateMatches.length !== 1) {
-    throw new Error("Codex interrupt lifecycle hook trust state changed after setup; refusing to overwrite it");
-  }
-  const stateStart = stateMatches[0].index!;
-  const stateEnd = stateStart + stateMatches[0][0].length;
-  if (stateStart < headerEnd && stateEnd > first) {
-    // The header and state patterns are built to be disjoint text; this only guards against a
-    // future bug in that split ever producing overlapping ranges.
-    throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
-  }
-
   const endMarker = text.indexOf(MANAGED_INTERRUPT_HOOK_END);
   if (managedMarkerCount(text) !== 1 || endMarker < 0
-    || (endMarker >= first && endMarker < headerEnd)
-    || (endMarker >= stateStart && endMarker < stateEnd)
+    || ranges.some(range => endMarker >= range.start && endMarker < range.end)
     || text.split(MANAGED_INTERRUPT_HOOK_END).length !== 2) {
     throw new Error("Codex interrupt lifecycle hook markers changed after setup; refusing to overwrite them");
-  }
-  if (endMarker < first) {
-    // A moved comment is independent of the owned definitions. Prove it is still a comment,
-    // rather than matching text inside an unrelated TOML value, before removing it separately.
-    const precedingConfig = text.slice(0, first);
-    const withoutMarker = precedingConfig.slice(0, endMarker)
-      + precedingConfig.slice(endMarker + MANAGED_INTERRUPT_HOOK_END.length);
-    try {
-      if (JSON.stringify(canonicalJson(Bun.TOML.parse(precedingConfig)))
-        !== JSON.stringify(canonicalJson(Bun.TOML.parse(withoutMarker)))) {
-        throw new Error("Marker removal changes TOML values");
-      }
-    } catch {
-      throw new Error("Codex interrupt lifecycle hook markers changed after setup; refusing to overwrite them");
-    }
   }
   if (codexInterruptHookHash(installed.command) !== installed.trustedHash) {
     throw new Error("Codex interrupt lifecycle hook journal hash is invalid");
   }
-  // Codex's TOML editor inserts new tables before trailing comments. The end marker can therefore
-  // move past unrelated config even though the owned hook fields remain unchanged. The relocated
-  // state table's own span is excised first, if it happens to fall in the scanned region, so its
-  // new position is never mistaken for an unexpected insertion.
-  const scanEnd = endMarker < first ? text.length : endMarker;
-  const appendedConfig = stateStart >= headerEnd && stateEnd <= scanEnd
-    ? text.slice(headerEnd, stateStart) + text.slice(stateEnd, scanEnd)
-    : text.slice(headerEnd, scanEnd);
-  const firstAssignment = appendedConfig.split(/\r\n|\n|\r/)
-    .map(line => line.trim()).find(line => line && !line.startsWith("#"));
-  if (firstAssignment && !/^\[\[?.+\]\]?(?:\s*#.*)?$/.test(firstAssignment)) {
+  const definitions = (value: unknown, groupIndex: number): string => {
+    const { hooks } = value as { hooks: { Interrupt: unknown[]; state: Record<string, unknown> } };
+    return JSON.stringify(canonicalJson([hooks.Interrupt[groupIndex], hooks.state[installed.stateKey]]));
+  };
+  // Check the complete document: an interleaved or later table must not extend either owned
+  // definition, and a matching fragment inside a multiline string must not establish ownership.
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(text.replace(/\r\n?/g, "\n"));
+    const expected = Bun.TOML.parse(ownedPrefix.replace(/\r\n?/g, "\n"));
+    if (definitions(parsed, installed.groupIndex) !== definitions(expected, 0)) {
+      throw new Error("Modified owned definitions");
+    }
+  } catch {
     throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
   }
-  if (firstAssignment) {
-    // A later table can also extend the owned hook or trust state. Compare those exact
-    // definitions with Bun's TOML parser before treating the inserted tables as unrelated.
-    const ownedDefinitions = (fragment: string): string => {
-      const { hooks } = Bun.TOML.parse(fragment) as {
-        hooks: { Interrupt: unknown[]; state: Record<string, unknown> };
-      };
-      return JSON.stringify(canonicalJson([hooks.Interrupt[0], hooks.state[installed.stateKey]]));
-    };
-    try {
-      if (ownedDefinitions(ownedPrefix) !== ownedDefinitions(ownedPrefix + appendedConfig)) {
-        throw new Error("Modified owned definitions");
-      }
-    } catch {
-      throw new Error("Codex interrupt lifecycle hook changed after setup; refusing to overwrite it");
-    }
-  }
   const end = endMarker + MANAGED_INTERRUPT_HOOK_END.length;
+  try {
+    const withoutMarker = Bun.TOML.parse((text.slice(0, endMarker) + text.slice(end)).replace(/\r\n?/g, "\n"));
+    if (JSON.stringify(canonicalJson(parsed)) !== JSON.stringify(canonicalJson(withoutMarker))) {
+      throw new Error("Marker removal changes TOML values");
+    }
+  } catch {
+    throw new Error("Codex interrupt lifecycle hook markers changed after setup; refusing to overwrite them");
+  }
   const trailing = installed.fragment.slice(marker + MANAGED_INTERRUPT_HOOK_END.length);
   const trailingLength = new RegExp("^" + hookTextPattern(trailing)).exec(text.slice(end))?.[0].length ?? 0;
-  // When the state table still immediately follows the header (only blank-line whitespace between
-  // them, the layout `installCodexInterruptHookCommand` writes), extend the header's deletion range
-  // through that gap so removal leaves no blank-line residue behind, exactly as it did before the
-  // header and state table were tracked as independently locatable spans.
-  const gapToState = stateStart >= headerEnd ? text.slice(headerEnd, stateStart) : "";
-  const headerDeleteEnd = stateStart >= headerEnd && /^(?:\r\n|\n|\r)*$/.test(gapToState)
-    ? stateStart
-    : headerEnd;
-  return [
-    { start: first, end: headerDeleteEnd },
-    { start: stateStart, end: stateEnd },
-    { start: endMarker, end: end + trailingLength },
-  ];
+  return [...ranges, { start: endMarker, end: end + trailingLength }];
 }
 
 export function verifyCodexInterruptHook(text: string, installed: InstalledCodexInterruptHook): void {
