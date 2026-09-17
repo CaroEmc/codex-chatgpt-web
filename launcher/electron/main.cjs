@@ -976,10 +976,14 @@ function registerIpc({ logger, stateStore }) {
     assertHitlSupported();
     const workspace = validateHitlWorkspace(stateStore.read().hitlWorkspace);
     await runtimeSupervisor.setTerminalHitlMode(true);
+    // Start doubles as restart: a running HITL server (e.g. with an older folder or approval
+    // setting) is stopped first, but only when it has no Codex task in flight.
+    const restarted = await runtimeSupervisor.stopTerminalHitlServer();
     const config = runtimeSupervisor.readSetupConfig();
     if (await runtimeSupervisor.proxyHealth(config)) {
-      throw new Error(`A server is already listening on port ${config.port}; close the existing HITL terminal first`);
+      throw new Error(`Another server is listening on port ${config.port}; close it before starting the HITL terminal`);
     }
+    if (restarted) logger.info("launcher.hitl_terminal_restarting", { workspace });
     launchHitlTerminal({
       invocation: runtimeHost.command(hitlServeArgs(workspace, stateStore.read().hitlAutoApprove)),
       scriptPath: path.join(CORE_HOME, "runtime", "hitl-terminal.cmd"),

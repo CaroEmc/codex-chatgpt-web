@@ -2165,3 +2165,70 @@ test("launcher supervisor recover skips daemon spawning when hitlEnabled is true
   }
 });
 
+
+function terminalHitlSupervisor() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-hitl-restart-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  fs.writeFileSync(
+    path.join(root, "config.json"),
+    `${JSON.stringify(launcherConfig(descriptorPath, { mode: "browser-only", hitlEnabled: true }))}\n`,
+  );
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  return { root, supervisor };
+}
+
+test("stopTerminalHitlServer drains and shuts down an idle HITL server", async () => {
+  const { root, supervisor } = terminalHitlSupervisor();
+  const actions = [];
+  supervisor.proxyHealth = async () => true;
+  supervisor.control = async (_config, action) => {
+    actions.push(action);
+    return action === "drain"
+      ? { status: "ok", active_http_turns: 0, active_browser_turns: 0 }
+      : { status: "ok" };
+  };
+  supervisor.waitForPortRelease = async () => { actions.push("released"); };
+  try {
+    assert.equal(await supervisor.stopTerminalHitlServer(), true);
+    assert.deepEqual(actions, ["drain", "shutdown", "released"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stopTerminalHitlServer never interrupts a running Codex task", async () => {
+  const { root, supervisor } = terminalHitlSupervisor();
+  const actions = [];
+  supervisor.proxyHealth = async () => true;
+  supervisor.control = async (_config, action) => {
+    actions.push(action);
+    return action === "drain"
+      ? { status: "ok", active_http_turns: 1, active_browser_turns: 1 }
+      : { status: "ok" };
+  };
+  try {
+    await assert.rejects(() => supervisor.stopTerminalHitlServer(), /still running/);
+    assert.deepEqual(actions, ["drain", "resume"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stopTerminalHitlServer is a no-op when no HITL server is listening", async () => {
+  const { root, supervisor } = terminalHitlSupervisor();
+  supervisor.proxyHealth = async () => false;
+  supervisor.control = async () => assert.fail("must not contact a server");
+  try {
+    assert.equal(await supervisor.stopTerminalHitlServer(), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

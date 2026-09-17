@@ -69,12 +69,15 @@ Codex model route, and — with `-Workspace <folder>` — a project `.codex/conf
 
 - Check only (changes nothing): `powershell -ExecutionPolicy Bypass -File scripts\install-friendly.ps1`
 - Apply the safe user-level fixes it offers: add `-Fix`
-- Install the packaged launcher: add `-ZipPath <codex-web-gpt-friendly-win-x64.zip>`, or
-  `-Install -Repository <owner/repo> [-Tag <tag>]` to download it from that repository's releases
+- Install the launcher: add `-Install -Repository <owner/repo> [-Tag <tag>]` to download the
+  installer from that repository's GitHub Release (through `gh` when available, which also works
+  for private repositories), or `-InstallerPath <codex-web-gpt-<version>-win-x64.exe>` for a local
+  file; either way the installer is verified against the release's `checksums.txt` first
 
-Maintainers build the zip with `scripts/package-friendly-release.ps1 -Build`; it bundles the NSIS
-installer, its checksum, `install-friendly.ps1`, and `INSTALL.txt`, and uploads to a GitHub Release
-only when `-Publish -Repository <owner/repo> -Tag <tag>` is given.
+Maintainers prepare the release with `scripts/package-friendly-release.ps1 -Build`. No archive is
+made: the release carries the NSIS installer itself, `install-friendly.ps1`, and a `checksums.txt`
+covering both, and is uploaded only when `-Publish -Repository <owner/repo> -Tag <tag>` is given
+(`-Target <branch>` sets where a new tag points).
 
 After installing, the launcher's **Setup** page walks through the rest: 1. sign in to ChatGPT,
 2. run the browser smoke test, 3. **Add models** to Codex (quit every Codex window first; start

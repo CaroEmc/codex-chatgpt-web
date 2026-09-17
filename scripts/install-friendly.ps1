@@ -2,19 +2,19 @@
 #
 # By default this only inspects the machine and prints a report; nothing is changed.
 #   -Fix       apply the safe, reversible fixes the report offers (user-level settings only)
-#   -Install   download the friendly release zip from GitHub Releases, verify it, and install it
-#   -ZipPath   install from a local friendly release zip instead of downloading
+#   -Install   download the Windows installer from a GitHub Release, verify it, and install it
+#   -InstallerPath install a local codex-web-gpt-*-win-x64.exe (verified against checksums.txt beside it)
 #   -Workspace also check a Codex project folder for settings that override the model picker
 #
 # Examples:
 #   powershell -ExecutionPolicy Bypass -File scripts\install-friendly.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\install-friendly.ps1 -Fix -Workspace D:\work\myproject
-#   powershell -ExecutionPolicy Bypass -File scripts\install-friendly.ps1 -Install -Repository owner/repo
+#   powershell -ExecutionPolicy Bypass -File scripts\install-friendly.ps1 -Install -Repository owner/repo [-Tag tag]
 
 param(
   [switch]$Fix,
   [switch]$Install,
-  [string]$ZipPath,
+  [string]$InstallerPath,
   [string]$Repository = $env:CODEX_WEB_GPT_REPOSITORY,
   [string]$Tag = $env:CODEX_WEB_GPT_FRIENDLY_TAG,
   [string]$Workspace,
@@ -27,7 +27,7 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 
-$FriendlyAsset = "codex-web-gpt-friendly-win-x64.zip"
+$InstallerPattern = "codex-web-gpt-*-win-x64.exe"
 $InstallRegistry = "HKCU:\Software\d1a6026a-6210-588e-9a2b-da3936f94e02"
 $ExpectedBunVersion = "1.4.0"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -340,7 +340,7 @@ function Test-Runtime {
   if ($Launcher) {
     Add-Result "Runtime" "Launcher" "OK" "$($Launcher.Version) at $($Launcher.Location)"
   } else {
-    Add-Result "Runtime" "Launcher" "FAIL" "not installed" "Rerun with -Install (or -ZipPath <zip>)"
+    Add-Result "Runtime" "Launcher" "FAIL" "not installed" "Rerun with -Install -Repository <owner/repo> (or -InstallerPath <exe>)"
   }
   if (Get-Process -Name "Codex Web GPT" -ErrorAction SilentlyContinue) {
     Add-Result "Runtime" "Launcher process" "OK" "running"
@@ -477,47 +477,52 @@ function Install-Friendly {
   $Temp = Join-Path ([IO.Path]::GetTempPath()) "codex-web-gpt-friendly-$([guid]::NewGuid().ToString('N'))"
   New-Item -ItemType Directory -Path $Temp | Out-Null
   try {
-    if ($ZipPath) {
-      $Zip = (Resolve-Path $ZipPath).Path
-      Write-Host "Using local package $Zip"
+    if ($InstallerPath) {
+      $InstallerFile = Get-Item (Resolve-Path $InstallerPath).Path
+      Write-Host "Using local installer $($InstallerFile.FullName)"
+      $Checksums = Join-Path $InstallerFile.DirectoryName "checksums.txt"
+      if (Test-Path $Checksums) {
+        $Expected = Get-ExpectedHash $Checksums $InstallerFile.Name
+        $Actual = (Get-FileHash -Algorithm SHA256 $InstallerFile.FullName).Hash.ToLowerInvariant()
+        if ($Actual -ne $Expected) { throw "SHA-256 verification failed for $($InstallerFile.Name)" }
+        Write-Host "Verified $($InstallerFile.Name) against checksums.txt"
+      } else {
+        Write-Host "No checksums.txt next to the installer; skipping SHA-256 verification" -ForegroundColor Yellow
+      }
     } else {
       if (-not $Repository -or $Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-        throw "Pass -Repository owner/name (or set CODEX_WEB_GPT_REPOSITORY) to download the friendly release"
+        throw "Pass -Repository owner/name (or set CODEX_WEB_GPT_REPOSITORY) to download the release"
       }
-      $Zip = Join-Path $Temp $FriendlyAsset
-      $Checksums = Join-Path $Temp "friendly-checksums.txt"
-      $Gh = Get-Command gh -ErrorAction SilentlyContinue
-      if ($Gh) {
+      $Checksums = Join-Path $Temp "checksums.txt"
+      if (Get-Command gh -ErrorAction SilentlyContinue) {
+        # gh also works for private repositories.
         $TagArgs = @()
         if ($Tag) { $TagArgs = @($Tag) }
-        Write-Host "Downloading $FriendlyAsset from $Repository with gh ..."
-        & gh release download @TagArgs -R $Repository -p $FriendlyAsset -p "friendly-checksums.txt" -D $Temp --clobber
+        Write-Host "Downloading the Windows installer from $Repository with gh ..."
+        & gh release download @TagArgs -R $Repository -p $InstallerPattern -p "checksums.txt" -D $Temp --clobber
         if ($LASTEXITCODE -ne 0) { throw "gh release download failed with code $LASTEXITCODE" }
       } else {
-        if ($Tag) { $BaseUrl = "https://github.com/$Repository/releases/download/$Tag" } else { $BaseUrl = "https://github.com/$Repository/releases/latest/download" }
-        Write-Host "Downloading $BaseUrl/$FriendlyAsset ..."
-        $null = Invoke-WithRetry -Label "Downloading $FriendlyAsset" -Operation {
-          Invoke-WebRequest "$BaseUrl/$FriendlyAsset" -OutFile $Zip -TimeoutSec 1800 -UseBasicParsing
-        }
-        $null = Invoke-WithRetry -Label "Downloading friendly-checksums.txt" -Operation {
-          Invoke-WebRequest "$BaseUrl/friendly-checksums.txt" -OutFile $Checksums -TimeoutSec 60 -UseBasicParsing
+        if ($Tag) { $ReleaseApi = "https://api.github.com/repos/$Repository/releases/tags/$Tag" } else { $ReleaseApi = "https://api.github.com/repos/$Repository/releases/latest" }
+        $Release = Invoke-WithRetry -Label "Resolving the release" -Operation { Invoke-RestMethod $ReleaseApi -TimeoutSec 60 }
+        $Assets = @($Release.assets | Where-Object { $_.name -like $InstallerPattern -or $_.name -eq "checksums.txt" })
+        if (($Assets | Measure-Object).Count -lt 2) { throw "Release $($Release.tag_name) has no Windows installer and checksums.txt" }
+        foreach ($Asset in $Assets) {
+          $Destination = Join-Path $Temp $Asset.name
+          Write-Host "Downloading $($Asset.name) ..."
+          $null = Invoke-WithRetry -Label "Downloading $($Asset.name)" -Operation {
+            Invoke-WebRequest $Asset.browser_download_url -OutFile $Destination -TimeoutSec 1800 -UseBasicParsing
+          }
         }
       }
-      $Expected = Get-ExpectedHash $Checksums $FriendlyAsset
-      $Actual = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLowerInvariant()
-      if ($Actual -ne $Expected) { throw "SHA-256 verification failed for $FriendlyAsset" }
-      Write-Host "Verified $FriendlyAsset ($Actual)"
+      $InstallerFile = Get-ChildItem $Temp -Filter $InstallerPattern | Select-Object -First 1
+      if (-not $InstallerFile) { throw "The release has no $InstallerPattern installer" }
+      if (-not (Test-Path $Checksums)) { throw "The release has no checksums.txt" }
+      $Expected = Get-ExpectedHash $Checksums $InstallerFile.Name
+      $Actual = (Get-FileHash -Algorithm SHA256 $InstallerFile.FullName).Hash.ToLowerInvariant()
+      if ($Actual -ne $Expected) { throw "SHA-256 verification failed for $($InstallerFile.Name)" }
+      Write-Host "Verified $($InstallerFile.Name) ($Actual)"
     }
-
-    $Extract = Join-Path $Temp "extract"
-    Expand-Archive -Path $Zip -DestinationPath $Extract -Force
-    $Installer = Get-ChildItem $Extract -Filter "codex-web-gpt-*-win-x64.exe" | Select-Object -First 1
-    if (-not $Installer) { throw "The package does not contain a codex-web-gpt-*-win-x64.exe installer" }
-    $InnerChecksums = Join-Path $Extract "checksums.txt"
-    if (-not (Test-Path $InnerChecksums)) { throw "The package does not contain checksums.txt" }
-    $InnerExpected = Get-ExpectedHash $InnerChecksums $Installer.Name
-    $InnerActual = (Get-FileHash -Algorithm SHA256 $Installer.FullName).Hash.ToLowerInvariant()
-    if ($InnerActual -ne $InnerExpected) { throw "SHA-256 verification failed for $($Installer.Name)" }
+    $Installer = $InstallerFile
 
     if (Get-Process -Name "Codex Web GPT" -ErrorAction SilentlyContinue) {
       throw "Quit Codex Web GPT (tray icon > Quit) before installing, then rerun this script"
@@ -571,7 +576,7 @@ function Write-Report {
 
 try {
   Write-Host "Codex Web GPT friendly installer" -ForegroundColor Cyan
-  if ($Install -or $ZipPath) {
+  if ($Install -or $InstallerPath) {
     Install-Friendly
   }
   Test-System

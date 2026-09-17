@@ -435,3 +435,12 @@ test("catalog verification reports a failed request instead of requesting anothe
   assert.equal(state.codexRestartRequired, false);
   assert.ok(events.some(([event]) => event === "codex.model_catalog_verified"));
 });
+
+test("the HITL start button stays available and doubles as restart", () => {
+  const step = appSource.slice(appSource.indexOf("function HitlSetupStep("), appSource.indexOf("function ContentSurface("));
+  assert.match(step, /action=\{status\.listening \? copy\.hitlRestart : copy\.hitlStart\}/);
+  assert.match(step, /disabled=\{busy\}\s*index=\{index\}/);
+  assert.match(step, /if \(!current\.workspace\) \{\s*current = await api!\.chooseHitlWorkspace\(\);/);
+  assert.match(step, /repeatable/);
+  assert.match(electronMain, /const restarted = await runtimeSupervisor\.stopTerminalHitlServer\(\);/);
+});

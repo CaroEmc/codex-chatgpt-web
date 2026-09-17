@@ -1945,23 +1945,32 @@ function HitlSetupStep({
   };
 
   if (!status?.supported) return null;
-  const locked = busy || status.listening;
+  // Start stays available at all times: without a folder it asks for one first, and while a
+  // terminal is running it restarts it (the main process refuses only while a task is in flight).
+  const start = () => void act(async () => {
+    let current = status;
+    if (!current.workspace) {
+      current = await api!.chooseHitlWorkspace();
+      setStatus(current);
+      if (!current.workspace) return current;
+    }
+    const started = await api!.startHitl();
+    onStarted();
+    return started;
+  });
   return (
     <>
       <SetupRow
-        action={copy.hitlStart}
+        action={status.listening ? copy.hitlRestart : copy.hitlStart}
         complete={status.listening}
         description={status.browserOnly ? copy.stepHitlBody : copy.hitlBrowserOnlyRequired}
-        disabled={locked || !status.browserOnly || !status.workspace}
+        disabled={busy}
         index={index}
-        onAction={() => void act(async () => {
-          const started = await api!.startHitl();
-          onStarted();
-          return started;
-        })}
+        onAction={start}
         onSecondaryAction={() => void act(() => api!.chooseHitlWorkspace())}
+        repeatable
         secondaryAction={copy.hitlChooseWorkspace}
-        secondaryDisabled={locked || !status.browserOnly}
+        secondaryDisabled={busy}
         title={copy.stepHitl}
       />
       {status.browserOnly ? (
@@ -1977,7 +1986,7 @@ function HitlSetupStep({
             </span>
             <Switch
               checked={status.autoApprove}
-              disabled={locked}
+              disabled={busy}
               onChange={(checked) => void act(() => api!.setPreference("hitlAutoApprove", checked))}
             />
           </div>
@@ -2000,7 +2009,7 @@ function HitlSetupStep({
           ) : null}
           {status.listening ? (
             <NoticeRow icon="check" tone="success">
-              {copy.hitlRunning} {copy.hitlRestartCodexHint}
+              {copy.hitlRunning}
             </NoticeRow>
           ) : null}
         </div>
@@ -2077,7 +2086,7 @@ function SetupRow({
       </div>
       <div className="setup-actions">
         {secondaryAction && onSecondaryAction ? (
-          <SecondaryButton disabled={secondaryDisabled || complete} onClick={onSecondaryAction}>
+          <SecondaryButton disabled={secondaryDisabled || (complete && !repeatable)} onClick={onSecondaryAction}>
             {secondaryAction}
           </SecondaryButton>
         ) : null}

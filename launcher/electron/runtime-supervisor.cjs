@@ -2079,6 +2079,23 @@ class RuntimeSupervisor {
     return Boolean(config && config.mode === "browser-only" && config.hitlEnabled === true);
   }
 
+  /** Gracefully stops a running terminal `serve --hitl` so a new terminal can take the port. Never
+   * interrupts a Codex task: a busy server is resumed and the caller is told to retry later. */
+  async stopTerminalHitlServer() {
+    const config = this.readConfig();
+    if (!config || !this.terminalHitlEnabled() || !await this.proxyHealth(config)) return false;
+    const drained = await this.control(config, "drain");
+    if (drained.active_http_turns > 0 || drained.active_browser_turns > 0) {
+      await this.control(config, "resume").catch(() => {});
+      throw new Error("A Codex task is still running in the HITL terminal; wait for it to finish, then press Start again");
+    }
+    const result = await this.control(config, "shutdown");
+    if (result.status !== "ok") throw new Error("The running HITL server did not acknowledge shutdown");
+    await this.waitForPortRelease(config);
+    this.logger.info("runtime.terminal_hitl_server_stopped", { port: config.port });
+    return true;
+  }
+
   async setTerminalHitlMode(enabled) {
     const setupConfig = this.readSetupConfig();
     if (!setupConfig) throw new Error("Complete setup before using HITL");
