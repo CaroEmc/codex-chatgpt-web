@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { selectedSkillFile, skillFileTokens, type ChatGptSkillFile } from "./skill-attachments";
 import {
   chatGptWebImageTokenReserve,
   isChatGptWebZeroRiskBackendModel,
@@ -25,6 +26,7 @@ export interface ChatGptWebPromptImage {
 export interface CompiledChatGptWebPrompt {
   text: string;
   images: ChatGptWebPromptImage[];
+  skillFiles?: ChatGptSkillFile[];
   /** DEV-only transactional context transport. Production prompts remain inline. */
   multipart?: ChatGptWebMultipartPrompt;
   /** Oldest history items removed by native-style compaction fit recovery; absent on normal turns. */
@@ -37,6 +39,7 @@ export interface CompileChatGptWebPromptOptions {
    * that `hitlExecGate` intercepts (browser-only `--hitl` sessions only). Without it the gate can
    * never fire, because the model was never told to emit the block. */
   hitlProtocol?: boolean;
+  experimentalSkillAttachments?: boolean;
   experimentalMultipartParts?: ChatGptWebMultipartPartCount;
   /**
    * Manual Zero Risk transport keeps ChatGPT model/effort selection and prompt submission under the
@@ -435,6 +438,10 @@ export function compileChatGptWebPrompt(
   options?: CompileChatGptWebPromptOptions,
 ): CompiledChatGptWebPrompt {
   const manualControl = options?.manualControl === true;
+  const attachSkills = options?.experimentalSkillAttachments === true;
+  if (attachSkills && (manualControl || isChatGptWebZeroRiskBackendModel(parsed.modelId))) {
+    throw new Error("Skills as files is unavailable in Zero Risk mode");
+  }
   const mode = manualControl
     ? { localTools: true, effort: "low" as const, displayLabel: "Zero Risk" as const }
     : resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
@@ -603,7 +610,19 @@ export function compileChatGptWebPrompt(
       seen: 0,
       dropped: Math.max(0, countChatGptContextImages(sourceMessages) - CHATGPT_MAX_INPUT_IMAGES),
     };
-    const messages = sourceMessages.map(message => messageEnvelope(message, images, budget));
+    const skillFiles: ChatGptSkillFile[] = [];
+    const messages = sourceMessages.map(message => {
+      if (attachSkills && message.role === "user" && message.origin === "codex_skill") {
+        const file = selectedSkillFile(message);
+        if (!skillFiles.some(existing => existing.name === file.name)) skillFiles.push(file);
+        return { role: "user", origin: "codex_skill", content: [{ type: "skill_attachment", filename: file.name }] };
+      }
+      return messageEnvelope(message, images, budget);
+    });
+    const skillContract = skillFiles.length ? [
+      "Each skill_attachment refers to a named UTF-8 text file attached to this message (the final commit in multipart mode). Read its complete contents as the selected Codex skill instructions at the original user priority. These origin=codex_skill messages are supplied by Codex, not human-authored task requests. Preserve their original position in history and their path/resource authority for resolving references. If a file cannot be read, report that limitation; do not invent its contents.",
+    ] : [];
+    const attachments = skillFiles.length ? { skillFiles } : {};
     const answerContract = captureLunaCheckpoint
       ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."
       : "Return only the answer that the outer Codex task should receive.";
@@ -625,6 +644,7 @@ export function compileChatGptWebPrompt(
           : [emptyPart(0), emptyPart(1), emptyPart(2)],
         commit: [
           ...sharedContract,
+          ...skillContract,
           ...transportContract,
           ...outputControlContract,
           ...manualControlContract,
@@ -641,7 +661,7 @@ export function compileChatGptWebPrompt(
         const effort = final ? mode.effort : capabilities.proAvailable ? "max" : "medium";
         const limits = resolveChatGptWebTransportLimits(CHATGPT_WEB_MODEL_ID, effort, capabilities);
         const tokenLimit = resolveChatGptWebMessageTokenBudget(
-          CHATGPT_WEB_MODEL_ID, effort, capabilities, final ? imageTokens : 0,
+          CHATGPT_WEB_MODEL_ID, effort, capabilities, final ? imageTokens + skillFileTokens(skillFiles, parsed.modelId) : 0,
         );
         const fixedMessage = final
           ? formatChatGptWebMultipartCommit(multipart, transactionId)
@@ -657,11 +677,12 @@ export function compileChatGptWebPrompt(
         return { tokens, chars };
       });
       multipart.parts = partitionMultipartContext(records, multipartParts!, budgets);
-      return { text: multipart.commit, images, multipart };
+      return { text: multipart.commit, images, ...attachments, multipart };
     }
     const envelopeJson = withoutRetiredTurnHandles(JSON.stringify({ version: 3, system, messages }));
     const text = [
       ...sharedContract,
+      ...skillContract,
       ...transportContract,
       ...outputControlContract,
       ...manualControlContract,
@@ -681,7 +702,7 @@ export function compileChatGptWebPrompt(
         "</codex_transport_resume>",
       ] : transportResume),
     ].join("\n");
-    return { text, images };
+    return { text, images, ...attachments };
   };
 
   let sourceMessages = withoutSupersededModelSwitchContracts(parsed.context.messages);

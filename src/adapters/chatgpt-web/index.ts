@@ -354,6 +354,13 @@ export function createChatGptWebAdapter(
   const structuredBroker = broker instanceof TurnBroker ? broker : undefined;
   const timeoutMs = provider.chatgptWeb?.turnTimeoutMs;
   const hitlActive = provider.chatgptWeb?.hitlEnabled === true;
+  const experimentalSkillAttachments = provider.chatgptWeb?.experimentalSkillAttachments;
+  if (experimentalSkillAttachments !== undefined && typeof experimentalSkillAttachments !== "boolean") {
+    throw new Error("ChatGPT skill attachments preference must be a boolean");
+  }
+  if (experimentalSkillAttachments && provider.chatgptWeb?.browserInteractionMode === "manual") {
+    throw new Error("Skills as files is unavailable in Zero Risk mode");
+  }
   const experimentalBiggerContext = provider.chatgptWeb?.experimentalBiggerContext;
   if (experimentalBiggerContext !== undefined && typeof experimentalBiggerContext !== "boolean") {
     throw new Error("ChatGPT Bigger Context preference must be a boolean");
@@ -463,13 +470,14 @@ export function createChatGptWebAdapter(
     const compileOptionsFor = (input: CodexParsedRequest) => {
       if (manualRequest) return {};
       const experimentalMultipartParts = experimentalBiggerContext
-        ? resolveBiggerContextMultipartParts(input, turnCapabilities)
+        ? resolveBiggerContextMultipartParts(input, turnCapabilities, experimentalSkillAttachments)
         : undefined;
       return {
         captureLunaCheckpoint,
         // Without this the model is never told the [EXEC_REQUEST] protocol exists, so the gate
         // below could never fire in a real session.
         ...(hitlTurnActive ? { hitlProtocol: true } : {}),
+        experimentalSkillAttachments,
         ...(experimentalMultipartParts !== undefined
           ? { experimentalMultipartParts }
           : {}),
@@ -1141,7 +1149,7 @@ export function createChatGptWebAdapter(
             emit({ type: "text_delta", text: summary, phase: "final_answer" });
             emitBrowserCompletion(
               { type: "final", answer: summary },
-              estimateChatGptWebUsage(parsed, { answer: summary, reasoning: [] }, turnCapabilities, experimentalBiggerContext),
+              estimateChatGptWebUsage(parsed, { answer: summary, reasoning: [] }, turnCapabilities, experimentalBiggerContext, experimentalSkillAttachments),
               emit,
             );
             chatGptWebTurnRetryPolicy.clear(retryKey);
@@ -1268,7 +1276,7 @@ export function createChatGptWebAdapter(
               session.setFinalEvents(session.roundEvents(roundKey));
               emitRoundBatch(buffer => emitBrowserCompletion(
                 settled,
-                estimateChatGptWebUsage(currentUsageInput(parsed), { answer: settled.answer, reasoning }, turnCapabilities, experimentalBiggerContext),
+                estimateChatGptWebUsage(currentUsageInput(parsed), { answer: settled.answer, reasoning }, turnCapabilities, experimentalBiggerContext, experimentalSkillAttachments),
                 buffer,
               ));
               session.completeRound(roundKey);
@@ -1290,7 +1298,7 @@ export function createChatGptWebAdapter(
                   if (replay.length === 0) emitRoundEvents(session.eventsForOutstandingReplay());
                   emitRoundBatch(buffer => emitToolBatch(
                     outstanding,
-                    estimateChatGptWebUsage(currentUsageInput(parsed), { reasoning, toolRequests: outstanding }, turnCapabilities, experimentalBiggerContext),
+                    estimateChatGptWebUsage(currentUsageInput(parsed), { reasoning, toolRequests: outstanding }, turnCapabilities, experimentalBiggerContext, experimentalSkillAttachments),
                     buffer,
                   ));
                   session.completeRound(roundKey);
@@ -1380,7 +1388,7 @@ export function createChatGptWebAdapter(
                 }
                 emitRoundBatch(buffer => emitBrowserCompletion(
                   completedOutcome,
-                  estimateChatGptWebUsage(currentUsageInput(parsed), { answer: completedOutcome.answer, reasoning: roundReasoning }, turnCapabilities, experimentalBiggerContext),
+                  estimateChatGptWebUsage(currentUsageInput(parsed), { answer: completedOutcome.answer, reasoning: roundReasoning }, turnCapabilities, experimentalBiggerContext, experimentalSkillAttachments),
                   buffer,
                 ));
                 session.completeRound(roundKey);
@@ -1438,7 +1446,7 @@ export function createChatGptWebAdapter(
                 session.setOutstanding(next.requests, roundReasoning, session.roundEvents(roundKey));
                 emitRoundBatch(buffer => emitToolBatch(
                   next.requests,
-                  estimateChatGptWebUsage(currentUsageInput(parsed), { reasoning: roundReasoning, toolRequests: next.requests }, turnCapabilities, experimentalBiggerContext),
+                  estimateChatGptWebUsage(currentUsageInput(parsed), { reasoning: roundReasoning, toolRequests: next.requests }, turnCapabilities, experimentalBiggerContext, experimentalSkillAttachments),
                   buffer,
                 ));
                 session.completeRound(roundKey);
