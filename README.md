@@ -135,6 +135,19 @@ delegate independent sub-tasks by running `codex exec` non-interactively as an a
 command (e.g. a scoped code review of one file), reading the result back with a second
 `[EXEC_REQUEST]`.
 
+If you're working from this repo (e.g. testing a fork with local changes not yet in an official
+release), build and install both pieces from source instead of downloading the prebuilt release
+binaries above, so the installed `codex-chatgpt-web` and **Codex Web GPT** actually reflect your
+changes:
+
+```bash
+./scripts/install-local.sh
+./scripts/install-launcher-local.sh
+```
+
+Skip this and use an official release if you don't have local changes to test; everything below
+applies either way.
+
 **Quick start, running the launcher app alongside `--hitl`:**
 
 1. Make sure the setup command above has run at least once. If this machine's config already uses
