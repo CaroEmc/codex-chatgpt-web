@@ -32,6 +32,11 @@ export interface LauncherState {
   hitlAutoApprove?: boolean;
 }
 
+export interface SetupFileChange {
+  path: string;
+  change: "created" | "modified" | "deleted";
+}
+
 export interface HitlStatus {
   supported: boolean;
   browserOnly: boolean;
@@ -117,6 +122,8 @@ export interface LauncherSnapshot {
   connectorName: string;
   connectorNames: Record<BrowserInteractionMode, string>;
   mcpCredentialsConfigured: boolean;
+  /** Browser-only HITL: a terminal `serve --hitl` owns the port, so Codex is verified only once it runs. */
+  terminalHitl?: boolean;
   logs: LogRecord[];
   urls: {
     github: string;
@@ -159,7 +166,12 @@ export interface LauncherApi {
   doctor(): Promise<DoctorReport>;
   cancelTurns(): Promise<{ stdout: string }>;
   uninstallIntegration(): Promise<{ cancelled: true } | { cancelled: false; state: LauncherState }>;
-  setupCore(): Promise<{ ok: boolean; stdout: string; restartRequired: boolean }>;
+  setupCore(): Promise<{
+    ok: boolean;
+    stdout: string;
+    restartRequired: boolean;
+    changedFiles?: SetupFileChange[];
+  }>;
   setupMcp(input: {
     tunnelId?: string;
     runtimeKey?: string;

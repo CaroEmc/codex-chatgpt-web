@@ -21,6 +21,7 @@ const { BrowserHost, navigationErrorForLog } = require("./browser-host.cjs");
 const { BrowserControlServer } = require("./control-server.cjs");
 const { HitlPopupController } = require("./hitl-popup.cjs");
 const { hitlCommandLine, launchHitlTerminal, validateHitlWorkspace } = require("./hitl-terminal.cjs");
+const { diffFileSnapshots, snapshotFiles, watchedSetupFiles } = require("./setup-file-changes.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const {
   createLogger,
@@ -492,6 +493,9 @@ function registerIpc({ logger, stateStore }) {
       manual: "Codex Zero Risk",
     },
     mcpCredentialsConfigured: runtimeHost?.mcpCredentialsConfigured() ?? false,
+    terminalHitl: (() => {
+      try { return runtimeSupervisor?.terminalHitlEnabled() === true; } catch { return false; }
+    })(),
     logs: logger.recent(),
     urls: { github: GITHUB_URL, x: X_URL, connectors: CONNECTORS_URL, tunnels: TUNNELS_URL, keys: KEYS_URL },
     platform: process.platform,
@@ -717,6 +721,13 @@ function registerIpc({ logger, stateStore }) {
     return { cancelled: false, state };
   });
   handle("launcher:setup-core", async () => {
+    if (!IS_DEV_PROFILE && runtimeSupervisor.terminalHitlEnabled()) {
+      const config = runtimeSupervisor.readSetupConfig();
+      if (config && await runtimeSupervisor.proxyHealth(config)) {
+        // Setup must bind the Responses port itself; a running `serve --hitl` holds it.
+        throw new Error("Close the HITL terminal window (step 4) before adding models, then start it again afterwards");
+      }
+    }
     const setupState = stateStore.read();
     if (setupState.browserInteractionMode === "automatic") {
       const browser = await browserHost.probeAuthentication();
@@ -738,7 +749,13 @@ function registerIpc({ logger, stateStore }) {
           : "Run the browser smoke test before installing the Codex integration",
       );
     }
+    const watchedFiles = IS_DEV_PROFILE
+      ? []
+      : watchedSetupFiles({ coreHome: CORE_HOME, codexHome: LAUNCHER_PROFILE.codexHome });
+    const filesBefore = snapshotFiles(watchedFiles);
     const result = IS_DEV_PROFILE ? await runtimeHost.setupDevCore() : await runtimeHost.setupCore();
+    const changedFiles = diffFileSnapshots(filesBefore, snapshotFiles(watchedFiles));
+    logger.info("setup.files_changed", { changedFiles });
     stateStore.update({
       coreSetupComplete: true,
       codexCatalogVerified: IS_DEV_PROFILE ? true : false,
@@ -760,7 +777,7 @@ function registerIpc({ logger, stateStore }) {
       });
     });
     if (!IS_DEV_PROFILE) startCatalogVerificationMonitor({ logger, stateStore });
-    return { ok: true, stdout: result.stdout, restartRequired: !IS_DEV_PROFILE };
+    return { ok: true, stdout: result.stdout, restartRequired: !IS_DEV_PROFILE, changedFiles };
   });
   handle("launcher:setup-mcp", async (_event, input) => {
     const currentMode = stateStore.read().browserInteractionMode;

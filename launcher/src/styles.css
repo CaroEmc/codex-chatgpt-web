@@ -2764,3 +2764,42 @@ code {
 .hitl-command code {
   user-select: all;
 }
+
+.setup-file-changes {
+  margin-top: 10px;
+  padding: 8px 11px;
+  border-left: 2px solid var(--color-border-heavy);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.setup-file-changes strong {
+  display: block;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.setup-file-changes ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-file-changes li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.setup-file-changes em {
+  flex: none;
+  min-width: 48px;
+  color: var(--color-text-tertiary);
+  font-style: normal;
+}
+
+.setup-file-changes code {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}

@@ -17,6 +17,7 @@ import type {
   BrowserState,
   DoctorReport,
   HitlStatus,
+  SetupFileChange,
   Language,
   LauncherSnapshot,
   LauncherState,
@@ -1129,13 +1130,25 @@ function SetupSurface({
     updateState((await api!.snapshot()).state);
   });
   const [modelsAdded, setModelsAdded] = useState(false);
+  const [changedFiles, setChangedFiles] = useState<SetupFileChange[] | null>(null);
+  // In terminal HITL mode the launcher runs no server, so Codex can only fetch the catalog once the
+  // step-4 terminal is up. Count the models as added once they are installed into Codex.
+  const installAwaitingHitl = !devProfile
+    && snapshot.terminalHitl === true
+    && snapshot.state.coreSetupComplete === true
+    && snapshot.state.codexCatalogVerified !== true;
+  const installComplete = snapshot.state.codexCatalogVerified === true || installAwaitingHitl;
   const install = () => {
     if (!devProfile && !window.confirm(copy.closeCodexBeforeInstall)) return;
     void run(async () => {
       setModelsAdded(false);
-      await api!.setupCore();
+      setChangedFiles(null);
+      const result = await api!.setupCore();
       updateState((await api!.snapshot()).state);
-      if (!devProfile) setModelsAdded(true);
+      if (!devProfile) {
+        setModelsAdded(true);
+        setChangedFiles(result.changedFiles ?? []);
+      }
     });
   };
   const setZeroRiskPro = (enabled: boolean) => run(async () => {
@@ -1178,8 +1191,10 @@ function SetupSurface({
           action={snapshot.state.coreSetupComplete
             ? devProfile ? copy.devReinstall : copy.reinstall
             : devProfile ? copy.devInstall : copy.install}
-          complete={snapshot.state.codexCatalogVerified === true}
-          description={devProfile ? copy.devStepInstallBody : copy.stepInstallBody}
+          complete={installComplete}
+          description={devProfile
+            ? copy.devStepInstallBody
+            : installAwaitingHitl ? copy.stepInstallHitlPending : copy.stepInstallBody}
           disabled={busy || (!snapshot.smokePassed && snapshot.state.coreSetupComplete !== true)}
           index={manualInteraction ? 1 : 3}
           onAction={install}
@@ -1203,6 +1218,21 @@ function SetupSurface({
         <NoticeRow icon="check" tone="success">
           {copy.launchCodexAfterInstall}
         </NoticeRow>
+      ) : null}
+      {modelsAdded && changedFiles ? (
+        <div className="setup-file-changes">
+          <strong>{changedFiles.length > 0 ? copy.setupFilesChanged : copy.setupFilesUnchanged}</strong>
+          {changedFiles.length > 0 ? (
+            <ul>
+              {changedFiles.map(file => (
+                <li key={file.path}>
+                  <em>{copy[`setupFile_${file.change}`]}</em>
+                  <code>{file.path}</code>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
 
       {!devProfile && snapshot.state.codexRestartRequired ? (
