@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchNativeCodex, nativeProxyFromPac } from "../src/native-network";
+import { rootCertificates } from "node:tls";
+import { fetchNativeCodex, mergeTrustedCa, nativeProxyFromPac } from "../src/native-network";
 import { LAUNCHER_BROWSER_IDLE_URL } from "../src/launcher-browser-host";
 
 const envKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
@@ -13,6 +14,12 @@ afterEach(() => {
     if (savedEnv[key] === undefined) delete process.env[key];
     else process.env[key] = savedEnv[key];
   }
+});
+
+test("merging an extra CA keeps every one of Bun's bundled roots and appends the extra certificate", () => {
+  const merged = mergeTrustedCa("FAKE-CORPORATE-ROOT-PEM");
+  for (const root of rootCertificates) expect(merged).toContain(root);
+  expect(merged.endsWith("FAKE-CORPORATE-ROOT-PEM")).toBe(true);
 });
 
 test("native proxy selection preserves Chromium's first route and rejects protocol guessing", () => {
@@ -100,3 +107,18 @@ test("native fetch reaches a proxy-only target, refreshes routing, and never ret
     rmSync(root, { recursive: true, force: true });
   }
 }, 15_000);
+
+test("an injected extra-CA dependency is consulted on every native fetch and never blocks a request", async () => {
+  for (const key of envKeys) delete process.env[key];
+  const calls: string[] = [];
+  const request = () => new Request("http://native-extra-ca-regression.invalid/responses", {
+    method: "POST", body: "native request", headers: { authorization: "Bearer codex-test-only" },
+    signal: AbortSignal.timeout(2000),
+  });
+  await expect(fetch(request())).rejects.toThrow();
+  let extraCaCalls = 0;
+  const extraTrustedCa = async () => { extraCaCalls++; return "FAKE-CORPORATE-ROOT-PEM"; };
+  // No launcher descriptor configured: this exercises the explicit-environment early-return branch.
+  await expect(fetchNativeCodex(request(), { extraTrustedCa })).rejects.toThrow();
+  expect(extraCaCalls).toBe(1);
+});
