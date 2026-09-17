@@ -135,6 +135,21 @@ delegate independent sub-tasks by running `codex exec` non-interactively as an a
 command (e.g. a scoped code review of one file), reading the result back with a second
 `[EXEC_REQUEST]`.
 
+**Quick start, running the launcher app alongside `--hitl`:**
+
+1. In the launcher's Preferences, turn off **Open at login** and quit it, so it can't silently
+   start its own background daemon (which can't do HITL — it has no attached TTY) before you get
+   a chance to start your own.
+2. With the launcher closed, open a terminal in this repo and run the setup command above once,
+   then run `codex-chatgpt-web serve --hitl` and leave it running in the foreground; run it again
+   from the repo directory at the start of every session.
+3. Start **Codex Web GPT** as usual: sign in, let the browser smoke test finish, and install
+   models. It detects that a runtime is already listening and won't start a conflicting one of its
+   own — any warning about that is expected and can be ignored. Keep it running alongside the
+   worker.
+4. Open the Codex CLI, pick a ChatGPT Web model, and its tool calls now arrive as
+   `[EXEC_REQUEST]` prompts in the terminal running `serve --hitl`.
+
 **Current limitations:**
 
 - **Write-capable, not sandboxed by content.** The exec channel runs whatever command you approve
