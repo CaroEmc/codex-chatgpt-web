@@ -453,6 +453,41 @@ function LauncherShell({
     if (show) await api!.showBrowser();
   }, []);
 
+  const hitlSupported = !devProfile && snapshot.platform === "win32";
+  const [hitlShared, setHitlShared] = useState<HitlStatus | null>(null);
+  const [hitlStartRequestedAt, setHitlStartRequestedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (!hitlSupported) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status = await api!.hitlStatus();
+        if (!cancelled) setHitlShared(status);
+      } catch {
+        // The setup step reports HITL errors; the banner simply stays hidden.
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [hitlSupported]);
+  useEffect(() => {
+    if (hitlShared?.listening) setHitlStartRequestedAt(null);
+  }, [hitlShared?.listening]);
+  const hitlStarting = hitlStartRequestedAt !== null && Date.now() - hitlStartRequestedAt < 90_000;
+  const hitlBanner: HitlBanner | null = hitlShared?.listening
+    ? { state: "waiting", workspace: hitlShared.workspace, autoApprove: hitlShared.autoApprove }
+    : hitlStarting
+      ? { state: "starting", workspace: hitlShared?.workspace ?? null, autoApprove: hitlShared?.autoApprove ?? false }
+      : null;
+  const onHitlStarted = useCallback(() => {
+    setHitlStartRequestedAt(Date.now());
+    void activateBrowser(true).catch((cause) => setError(messageOf(cause)));
+  }, [activateBrowser, setError]);
+
   const toggleSidebar = () => {
     const next = !sidebarOpen;
     if (compactSidebar && next && surface === "browser") {
@@ -646,6 +681,7 @@ function LauncherShell({
                 browser={browser}
                 browserSlotRef={browserSlotRef}
                 copy={copy}
+                hitlBanner={hitlBanner}
                 interactionMode={snapshot.state.browserInteractionMode}
                 operation={operation}
                 platform={snapshot.platform}
@@ -655,6 +691,7 @@ function LauncherShell({
             {surface === "setup" ? (
               <SetupSurface
                 activateBrowser={activateBrowser}
+                onHitlStarted={onHitlStarted}
                 browser={browser}
                 copy={copy}
                 devProfile={devProfile}
@@ -799,10 +836,34 @@ function SidebarItem({
   );
 }
 
+interface HitlBanner {
+  state: "starting" | "waiting";
+  workspace: string | null;
+  autoApprove: boolean;
+}
+
+function HitlWaitingBanner({ banner, copy }: { banner: HitlBanner; copy: Copy }) {
+  const starting = banner.state === "starting";
+  return (
+    <div className={`hitl-waiting-banner${starting ? " is-starting" : ""}`} role="status">
+      <span className="hitl-waiting-dot" aria-hidden="true" />
+      <div>
+        <strong>{starting ? copy.hitlBannerStarting : copy.hitlBannerWaiting}</strong>
+        <p>
+          {copy.hitlBannerBody}
+          {banner.workspace ? <> <code>{banner.workspace}</code></> : null}
+          {banner.autoApprove ? ` · ${copy.hitlBannerAutoApprove}` : ""}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function BrowserSurface({
   browser,
   browserSlotRef,
   copy,
+  hitlBanner,
   interactionMode,
   operation,
   platform,
@@ -811,6 +872,7 @@ function BrowserSurface({
   browser: BrowserState | null;
   browserSlotRef: (node: HTMLDivElement | null) => void;
   copy: Copy;
+  hitlBanner: HitlBanner | null;
   interactionMode: BrowserInteractionMode;
   operation: OperationState | null;
   platform: string;
@@ -981,6 +1043,9 @@ function BrowserSurface({
         </button>
         {browser?.loading ? <i className="browser-loading-line" /> : null}
       </div>
+      {hitlBanner && browser?.status !== "running" && browser?.status !== "testing" ? (
+        <HitlWaitingBanner banner={hitlBanner} copy={copy} />
+      ) : null}
       {selectedManualTab
         && ["awaiting-user", "sent"].includes(selectedManualTab.manualState ?? "") ? (
         <ManualTurnGuide
@@ -1082,6 +1147,7 @@ function SetupSurface({
   browser,
   copy,
   devProfile,
+  onHitlStarted,
   operation,
   setError,
   showMcp,
@@ -1092,6 +1158,7 @@ function SetupSurface({
   browser: BrowserState | null;
   copy: Copy;
   devProfile: boolean;
+  onHitlStarted: () => void;
   operation: OperationState | null;
   setError: (error: string | null) => void;
   showMcp: () => void;
@@ -1210,7 +1277,7 @@ function SetupSurface({
           ) : undefined}
         />
         {!devProfile && !manualInteraction ? (
-          <HitlSetupStep copy={copy} index={4} setError={setError} />
+          <HitlSetupStep copy={copy} index={4} onStarted={onHitlStarted} setError={setError} />
         ) : null}
       </div>
 
@@ -1806,10 +1873,12 @@ function SettingsSurface({
 function HitlSetupStep({
   copy,
   index,
+  onStarted,
   setError,
 }: {
   copy: Copy;
   index: number;
+  onStarted: () => void;
   setError: (error: string | null) => void;
 }) {
   const [status, setStatus] = useState<HitlStatus | null>(null);
@@ -1866,7 +1935,11 @@ function HitlSetupStep({
         description={status.browserOnly ? copy.stepHitlBody : copy.hitlBrowserOnlyRequired}
         disabled={locked || !status.browserOnly || !status.workspace}
         index={index}
-        onAction={() => void act(() => api!.startHitl())}
+        onAction={() => void act(async () => {
+          const started = await api!.startHitl();
+          onStarted();
+          return started;
+        })}
         onSecondaryAction={() => void act(() => api!.chooseHitlWorkspace())}
         secondaryAction={copy.hitlChooseWorkspace}
         secondaryDisabled={locked || !status.browserOnly}

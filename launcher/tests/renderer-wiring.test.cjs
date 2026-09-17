@@ -383,3 +383,12 @@ test("adding models is refused while a terminal HITL server holds the Responses 
   await setup();
   assert.equal(installs, 1);
 });
+
+test("starting the HITL terminal switches to the browser and shows a waiting banner", () => {
+  assert.match(appSource, /const started = await api!\.startHitl\(\);\s*onStarted\(\);/);
+  assert.match(appSource, /setHitlStartRequestedAt\(Date\.now\(\)\);\s*void activateBrowser\(true\)/);
+  assert.match(appSource, /hitlShared\?\.listening\s*\?\s*\{ state: "waiting"/);
+  assert.match(appSource, /<HitlWaitingBanner banner=\{hitlBanner\} copy=\{copy\} \/>/);
+  assert.match(appSource, /hitlBanner && browser\?\.status !== "running"/);
+  assert.match(stylesSource, /\.hitl-waiting-banner\s*\{/);
+});
