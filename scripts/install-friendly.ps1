@@ -527,8 +527,16 @@ function Install-Friendly {
     if ($Process.ExitCode -ne 0) { throw "Installer exited with code $($Process.ExitCode)" }
     $Launcher = Get-LauncherInstall
     if (-not $Launcher) { throw "The installer finished but the launcher was not found" }
+    # Inherited from Electron hosts such as VS Code; it would make the launcher run as plain Node
+    # and exit immediately without opening a window.
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
     Start-Process $Launcher.Executable
-    Write-Host "Installed and started $($Launcher.Executable) ($($Launcher.Version))"
+    Start-Sleep -Seconds 5
+    if (Get-Process -Name "Codex Web GPT" -ErrorAction SilentlyContinue) {
+      Write-Host "Installed and started $($Launcher.Executable) ($($Launcher.Version))"
+    } else {
+      Write-Host "Installed $($Launcher.Executable) ($($Launcher.Version)), but it did not stay running; start Codex Web GPT from the Start menu" -ForegroundColor Yellow
+    }
   } finally {
     Remove-Item -Recurse -Force $Temp -ErrorAction SilentlyContinue
   }

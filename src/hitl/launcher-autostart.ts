@@ -14,7 +14,10 @@ const defaultDeps: LauncherAutostartDeps = {
   readDescriptor: readLauncherBrowserHostDescriptor,
   findExecutable: () => findInstalledLauncherExecutable(),
   startLauncher: executable => {
-    const child = spawn(executable, [], { detached: true, env: process.env, stdio: "ignore", windowsHide: false });
+    // Inherited from Electron hosts (e.g. a VS Code terminal or extension); it would make the
+    // launcher run as plain Node and exit immediately.
+    const { ELECTRON_RUN_AS_NODE: _electronAsNode, ...env } = process.env;
+    const child = spawn(executable, [], { detached: true, env, stdio: "ignore", windowsHide: false });
     child.unref();
   },
   sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)),
