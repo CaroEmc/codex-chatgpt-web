@@ -10,6 +10,7 @@ const read = (...parts) => fs.readFileSync(path.join(repositoryRoot, ...parts), 
 
 const englishReadme = read("README.md");
 const chineseReadme = read("README.zh-CN.md");
+const traditionalChineseReadme = read("README.zh-TW.md");
 const japaneseReadme = read("README.ja.md");
 const koreanReadme = read("README.ko.md");
 const languages = require("../electron/languages.json");
@@ -40,7 +41,7 @@ function linkTargets(source) {
 }
 
 test("localized READMEs preserve every command block and link target from English", () => {
-  for (const source of [chineseReadme, japaneseReadme, koreanReadme]) {
+  for (const source of [chineseReadme, traditionalChineseReadme, japaneseReadme, koreanReadme]) {
     assert.deepEqual(commandFences(source), commandFences(englishReadme));
     assert.deepEqual(linkTargets(source), linkTargets(englishReadme));
   }
