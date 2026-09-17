@@ -16,6 +16,7 @@ import type {
   BrowserInteractionMode,
   BrowserState,
   DoctorReport,
+  HitlStatus,
   Language,
   LauncherSnapshot,
   LauncherState,
@@ -1716,6 +1717,8 @@ function SettingsSurface({
         </NoticeRow>
       ) : null}
 
+      {!devProfile ? <HitlSection copy={copy} setError={setError} /> : null}
+
       <SectionHeading label={copy.diagnostics} spaced />
       <button className="diagnostic-row" disabled={busy} onClick={() => void runDoctor()} type="button">
         <Icon name="activity" />
@@ -1754,6 +1757,70 @@ function SettingsSurface({
         </span>
       </div>
     </ContentSurface>
+  );
+}
+
+function HitlSection({ copy, setError }: { copy: Copy; setError: (error: string | null) => void }) {
+  const [status, setStatus] = useState<HitlStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await api!.hitlStatus());
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }, [setError]);
+
+  useEffect(() => {
+    void refresh();
+    // The HITL server lives in its own terminal window, so poll to notice it starting or closing.
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const act = async (action: () => Promise<HitlStatus>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await action());
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!status?.supported) return null;
+  const locked = busy || status.listening;
+  return (
+    <>
+      <SectionHeading label={copy.hitlTitle} spaced />
+      <div className="settings-list">
+        <SettingRow body={status.browserOnly ? copy.hitlBody : copy.hitlBrowserOnlyRequired} label={copy.hitlTitle}>
+          <PrimaryButton disabled={locked || !status.browserOnly || !status.workspace} onClick={() => void act(() => api!.startHitl())}>
+            {copy.hitlStart}
+          </PrimaryButton>
+        </SettingRow>
+        <SettingRow body={status.workspace ?? copy.hitlNoWorkspace} label={copy.hitlWorkspace}>
+          <SecondaryButton disabled={locked || !status.browserOnly} onClick={() => void act(() => api!.chooseHitlWorkspace())}>
+            {copy.hitlChooseWorkspace}
+          </SecondaryButton>
+        </SettingRow>
+        {status.enabled && !status.listening ? (
+          <SettingRow body={copy.hitlModeIdle} label={copy.hitlDisable}>
+            <SecondaryButton disabled={busy} onClick={() => void act(() => api!.disableHitl())}>
+              {copy.hitlDisable}
+            </SecondaryButton>
+          </SettingRow>
+        ) : null}
+      </div>
+      {status.listening ? (
+        <NoticeRow icon="check" tone="success">
+          {copy.hitlRunning} {copy.hitlRestartCodexHint}
+        </NoticeRow>
+      ) : null}
+    </>
   );
 }
 

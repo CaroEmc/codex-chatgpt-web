@@ -729,6 +729,52 @@ export class ChatGptPromptAttachmentIntegrityError extends ChatGptWebAdapterErro
   }
 }
 
+export type ChatGptStalledReplyCategory = "limit_notice" | "error_notice" | "unrecognized";
+
+const CHATGPT_STALLED_REPLY_EXCERPT_CHARS = 200;
+
+/** ChatGPT sometimes renders a usage-limit or error notice in the assistant slot instead of an
+ * answer; such notices carry no completion actions, so the turn looks stalled. */
+export function classifyStalledChatGptReply(text: string): ChatGptStalledReplyCategory {
+  if (/rate limit|too many requests|reached (?:the|your|our) (?:\w+ )?(?:limit|cap)|usage (?:cap|limit)|limit (?:for|of) |try again (?:later|in|after)|太多|上限|頻繁|频繁|しばらくしてから/i.test(text)) {
+    return "limit_notice";
+  }
+  if (/something went wrong|an error occurred|error (?:in|while|generating|occurred)|network error|failed to (?:load|generate|get|complete)|unable to (?:load|generate|complete)|出錯|出错|錯誤|错误|エラー/i.test(text)) {
+    return "error_notice";
+  }
+  return "unrecognized";
+}
+
+const CHATGPT_STALLED_REPLY_LABELS: Record<ChatGptStalledReplyCategory, string> = {
+  limit_notice: "what looks like a usage or rate limit notice",
+  error_notice: "what looks like an error notice",
+  unrecognized: "a reply without its completion controls",
+};
+
+/** The user-facing message quotes the stalled reply so the operator need not open the ChatGPT tab;
+ * `diagnosticMessage` omits it, because browser diagnostics never persist response content. */
+export class ChatGptStalledReplyError extends ChatGptWebAdapterError {
+  readonly category: ChatGptStalledReplyCategory;
+  readonly diagnosticMessage: string;
+
+  constructor(baseMessage: string, replyText: string) {
+    const category = classifyStalledChatGptReply(replyText);
+    const collapsed = replyText.replace(/\s+/g, " ").trim();
+    const excerpt = collapsed.length > CHATGPT_STALLED_REPLY_EXCERPT_CHARS
+      ? `${collapsed.slice(0, CHATGPT_STALLED_REPLY_EXCERPT_CHARS)}…`
+      : collapsed;
+    super(`${baseMessage}. ChatGPT showed ${CHATGPT_STALLED_REPLY_LABELS[category]}: "${excerpt}"`, {
+      status: 502,
+      errorType: "server_error",
+      code: "chatgpt_reply_stalled",
+      retryable: false,
+    });
+    this.name = "ChatGptStalledReplyError";
+    this.category = category;
+    this.diagnosticMessage = `${baseMessage} (stalled reply category: ${category}, chars: ${replyText.length})`;
+  }
+}
+
 const chatGptRateLimitDialog = (page: Page): Locator => page.locator('[role="dialog"]')
   .filter({ hasText: /Too many requests|太多要求|太多请求|リクエストが多すぎます/i })
   .filter({ hasText: /making requests too quickly|過於頻繁|过于频繁|リクエストの頻度が高すぎます/i })
@@ -1486,6 +1532,7 @@ export class ChatGptTurnDomHealthTracker {
   private missingResponseSince?: number;
   private emptyCompletionSince?: number;
   private missingCompletionAction?: { text: string; since: number };
+  private stalledReplyText?: string;
 
   constructor(
     private readonly missingResponseMs = CHATGPT_RESPONSE_DOM_GRACE_MS,
@@ -1554,11 +1601,22 @@ export class ChatGptTurnDomHealthTracker {
     } else if (this.missingCompletionAction?.text !== state.currentText) {
       this.missingCompletionAction = { text: state.currentText, since: now };
     } else if (now - this.missingCompletionAction.since >= this.missingCompletionActionMs) {
-      return "ChatGPT stopped generating but did not expose its completed-turn action; the ChatGPT DOM may have changed";
+      this.stalledReplyText = state.currentText;
+      return CHATGPT_MISSING_COMPLETION_ACTION_MESSAGE;
     }
     return undefined;
   }
+
+  /** Turns an `update()` result into the error to throw, quoting the stalled reply when there is one. */
+  toError(message: string): Error {
+    return message === CHATGPT_MISSING_COMPLETION_ACTION_MESSAGE && this.stalledReplyText !== undefined
+      ? new ChatGptStalledReplyError(message, this.stalledReplyText)
+      : new Error(message);
+  }
 }
+
+const CHATGPT_MISSING_COMPLETION_ACTION_MESSAGE =
+  "ChatGPT stopped generating but did not expose its completed-turn action; the ChatGPT DOM may have changed";
 
 /**
  * Consecutive internal observation faults tolerated before a turn is abandoned.
@@ -1999,7 +2057,11 @@ class ChatGptBrowserDiagnostics {
         traceId: this.traceId,
         checkpoint,
         ...(error !== undefined ? {
-          error: redactChatGptUiDiagnostic(error instanceof Error ? error.message : String(error)),
+          error: redactChatGptUiDiagnostic(
+            error instanceof ChatGptStalledReplyError
+              ? error.diagnosticMessage
+              : error instanceof Error ? error.message : String(error),
+          ),
         } : {}),
         ...(stateResult.status === "fulfilled"
           ? { state: sanitizeChatGptBrowserDiagnosticState(stateResult.value) }
@@ -3034,12 +3096,17 @@ export class ChatGptBrowserWorker {
     }
     throwIfPromptAttachmentAborted(abortSignal);
     const commonPrefix = this.promptEquivalentPrefixLength(prompt, observed);
+    // Code points only (never content): identifies which substitution the composer made.
+    const codePoint = (text: string) => {
+      const value = text.codePointAt(commonPrefix);
+      return value === undefined ? "none" : `U+${value.toString(16).toUpperCase().padStart(4, "0")}`;
+    };
     // The mismatched composer content is only observable right here -- attachPrompt's own catch
     // block clears composer state as soon as this error propagates, so any later diagnostic
     // capture (e.g. the outer retry's own checkpoint) only ever sees an already-emptied composer.
     await captureDiagnostic?.("prompt-attachment-mismatch-detected");
     throw new ChatGptPromptAttachmentIntegrityError(
-      `ChatGPT composer did not preserve the complete prompt (expectedChars=${prompt.length}, actualChars=${observed.length}, commonPrefixChars=${commonPrefix})`,
+      `ChatGPT composer did not preserve the complete prompt (expectedChars=${prompt.length}, actualChars=${observed.length}, commonPrefixChars=${commonPrefix}, expectedCodePoint=${codePoint(prompt)}, observedCodePoint=${codePoint(observed)})`,
     );
   }
 
@@ -3586,7 +3653,7 @@ export class ChatGptBrowserWorker {
         completionActionVisible: snapshot.completionActionVisible,
         externalProgressLive,
       });
-      if (domError) throw new Error(domError);
+      if (domError) throw domHealthTracker.toError(domError);
       if (completionTracker.update({
         responsePresent: snapshot.responsePresent,
         running,
@@ -5105,7 +5172,7 @@ export class ChatGptBrowserWorker {
             completionActionVisible: snapshot.completionActionVisible,
             externalProgressLive,
           });
-          if (domError) throw new Error(domError);
+          if (domError) throw domHealthTracker.toError(domError);
           const completionReady = completionTracker.update({
             responsePresent: snapshot.responsePresent,
             running,
@@ -5230,7 +5297,7 @@ export class ChatGptBrowserWorker {
             completionActionVisible: false,
             externalProgressLive,
           });
-          if (domError) throw new Error(domError);
+          if (domError) throw domHealthTracker.toError(domError);
         }
         await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
        } catch (error) {

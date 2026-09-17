@@ -155,6 +155,7 @@ test("hitlEnabled sessions run an approved EXEC_REQUEST and feed EXEC_RESULT bac
     purpose: "dev-harness" as const,
     solAvailable: true,
     proAvailable: true,
+    extraHighAvailable: true,
   };
   let round = 0;
   const factory = (): ProviderAdapter => ({
@@ -202,6 +203,7 @@ test("a persisted hitlEnabled=true chat never parses/executes an EXEC_REQUEST on
     purpose: "dev-harness" as const,
     solAvailable: true,
     proAvailable: true,
+    extraHighAvailable: true,
   };
   const execRequestText = "[EXEC_REQUEST]\ncommand: printf hello\nreason: greet\n[/EXEC_REQUEST]";
   const factory = (): ProviderAdapter => ({

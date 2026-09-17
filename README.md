@@ -126,6 +126,26 @@ codex-chatgpt-web serve --hitl
 activates in the foreground with an attached TTY — it fails closed (no exec) under any other
 condition, such as running as a background service.
 
+Commands are confined to a **workspace root**: the directory you run `serve` from, or the one given
+with `--workspace` (Codex does not tell the daemon which project it has open, so point this at the
+same project):
+
+```bash
+codex-chatgpt-web serve --hitl --workspace D:\path\to\your\project
+```
+
+If you accept the risk, `--hitl-auto-approve` skips the per-command prompt entirely: every command
+the model requests runs immediately (still confined to the workspace root and echoed to the
+terminal), including destructive ones.
+
+On Windows the launcher can do this for you: **Settings → Local exec (HITL)** lets you pick the
+workspace folder and opens a terminal window running the server. Close that window to stop it, and
+use **Leave HITL mode** to hand the port back to the launcher's background runtime.
+
+The model is told this root and asked for relative `cwd` values. A request whose `cwd` resolves
+outside it is blocked without prompting, logged as `[hitl] blocked EXEC_REQUEST ...`, and the model
+is told why so it can retry with a relative path.
+
 Once active, the model can ask to run a command by emitting an `[EXEC_REQUEST]` block; the
 terminal shows an **AI EXECUTION PROPOSAL** and waits for you to press Enter/`y` to run it, `n`/Esc
 to reject, or `c` to edit the command first. Nothing executes without that per-command approval.

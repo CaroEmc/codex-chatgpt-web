@@ -28,6 +28,15 @@ export interface LauncherState {
   codexRestartRequired?: boolean;
   mcpGuideStep: number;
   sessionRefreshReminderAt: string | null;
+  hitlWorkspace?: string | null;
+}
+
+export interface HitlStatus {
+  supported: boolean;
+  browserOnly: boolean;
+  enabled: boolean;
+  listening: boolean;
+  workspace: string | null;
 }
 
 export interface BrowserState {
@@ -157,6 +166,10 @@ export interface LauncherApi {
   setMcpStep(step: number): Promise<LauncherState>;
   setAutostart(enabled: boolean): Promise<{ state: LauncherState; supported: boolean; enabled: boolean }>;
   setBiggerContext(enabled: boolean): Promise<LauncherState>;
+  hitlStatus(): Promise<HitlStatus>;
+  chooseHitlWorkspace(): Promise<HitlStatus>;
+  startHitl(): Promise<HitlStatus>;
+  disableHitl(): Promise<HitlStatus>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;

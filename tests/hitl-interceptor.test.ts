@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createHitlExecGate, createHitlEmitFilter, HitlApprovalQueue } from "../src/adapters/chatgpt-web/hitl-interceptor";
 import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hitl/approval";
 
@@ -37,7 +37,8 @@ test("createHitlExecGate resumes with the formatted EXEC_RESULT after an approve
 test("createHitlExecGate resumes with the rejection text when the gateway rejects", async () => {
   const gate = createHitlExecGate({
     approvalGateway: fakeGateway({ action: "reject" }),
-    workspaceCwd: "/workspace",
+    // Platform-absolute, so the request reaches the gateway instead of the cwd boundary check.
+    workspaceCwd: resolve("/workspace"),
   });
   const text = "[EXEC_REQUEST]\ncommand: rm -rf /\n[/EXEC_REQUEST]";
   expect(await gate.check(text)).toEqual({

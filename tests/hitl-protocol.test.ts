@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS,
+  HITL_BATCH_EXAMPLE,
+  HITL_SHELL_NOTE,
   EXEC_REJECTED_TEXT,
   formatExecResult,
   parseExecRequest,
@@ -130,4 +132,23 @@ test("documents the existing single-line limit: a command value with an embedded
     "[/EXEC_REQUEST]",
   ].join("\n");
   expect(parseExecRequest(text)?.command).toBe("codex exec -C /repo 'first line of the prompt");
+});
+
+test("HITL instructions ask the model to batch read-only queries using the real shell's separator", () => {
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("batch read-only inspection");
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(HITL_SHELL_NOTE);
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain(HITL_BATCH_EXAMPLE);
+  expect(DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS).toContain("explicit paths");
+  if (process.platform === "win32") {
+    expect(HITL_SHELL_NOTE).toContain("cmd.exe");
+    expect(HITL_BATCH_EXAMPLE).toContain(" & ");
+    expect(HITL_BATCH_EXAMPLE).not.toContain(";");
+  } else {
+    expect(HITL_BATCH_EXAMPLE).toContain("; ");
+  }
+});
+
+test("the batching example is itself a valid single-line command field", () => {
+  const parsed = parseExecRequest(`[EXEC_REQUEST]\n${HITL_BATCH_EXAMPLE}\ncwd: .\n[/EXEC_REQUEST]`);
+  expect(parsed?.command).toBe(HITL_BATCH_EXAMPLE.slice("command: ".length));
 });

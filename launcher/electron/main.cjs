@@ -19,6 +19,7 @@ const {
 const { BrowserHost, navigationErrorForLog } = require("./browser-host.cjs");
 const { BrowserControlServer } = require("./control-server.cjs");
 const { HitlPopupController } = require("./hitl-popup.cjs");
+const { launchHitlTerminal, validateHitlWorkspace } = require("./hitl-terminal.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const {
   createLogger,
@@ -203,6 +204,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "Open Codex Web GPT",
     quit: "Quit",
     exportDiagnostics: "Export privacy-safe diagnostics",
+    chooseHitlWorkspace: "Choose HITL workspace folder",
     cancel: "Cancel",
     remove: "Remove",
     removeTitle: "Remove Codex Web GPT",
@@ -217,6 +219,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "打开 Codex Web GPT",
     quit: "退出",
     exportDiagnostics: "导出隐私安全诊断",
+    chooseHitlWorkspace: "选择 HITL 工作文件夹",
     cancel: "取消",
     remove: "移除",
     removeTitle: "移除 Codex Web GPT",
@@ -231,6 +234,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "開啟 Codex Web GPT",
     quit: "結束",
     exportDiagnostics: "匯出隱私安全診斷",
+    chooseHitlWorkspace: "選擇 HITL 工作資料夾",
     cancel: "取消",
     remove: "移除",
     removeTitle: "移除 Codex Web GPT",
@@ -245,6 +249,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "Codex Web GPT を開く",
     quit: "終了",
     exportDiagnostics: "プライバシー保護済みの診断情報をエクスポート",
+    chooseHitlWorkspace: "HITL の作業フォルダーを選択",
     cancel: "キャンセル",
     remove: "削除",
     removeTitle: "Codex Web GPT を削除",
@@ -259,6 +264,7 @@ const NATIVE_COPY = Object.freeze({
     openLauncher: "Codex Web GPT 열기",
     quit: "종료",
     exportDiagnostics: "개인정보가 보호된 진단 정보 내보내기",
+    chooseHitlWorkspace: "HITL 작업 폴더 선택",
     cancel: "취소",
     remove: "제거",
     removeTitle: "Codex Web GPT 제거",
@@ -874,6 +880,59 @@ function registerIpc({ logger, stateStore }) {
     return stateStore.update({ [key]: value === true });
   });
   handle("launcher:sidebar-state", (_event, value) => stateStore.update(validateSidebarState(value)));
+  const hitlStatus = async () => {
+    const config = runtimeSupervisor.readSetupConfig();
+    const enabled = runtimeSupervisor.terminalHitlEnabled();
+    return {
+      supported: !IS_DEV_PROFILE && process.platform === "win32",
+      browserOnly: config?.mode === "browser-only",
+      enabled,
+      listening: Boolean(enabled && config && await runtimeSupervisor.proxyHealth(config)),
+      workspace: stateStore.read().hitlWorkspace,
+    };
+  };
+  const assertHitlSupported = () => {
+    if (IS_DEV_PROFILE) throw new Error("DEV profile HITL is started from the repository CLI");
+    if (process.platform !== "win32") throw new Error("Starting HITL from the launcher is currently supported on Windows only");
+  };
+  handle("launcher:hitl-status", () => hitlStatus());
+  handle("launcher:hitl-choose-workspace", async () => {
+    assertHitlSupported();
+    const current = stateStore.read().hitlWorkspace;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: nativeCopyFor(stateStore.read().language).chooseHitlWorkspace,
+      properties: ["openDirectory"],
+      ...(current ? { defaultPath: current } : {}),
+    });
+    if (result.canceled || !result.filePaths[0]) return hitlStatus();
+    stateStore.update({ hitlWorkspace: validateHitlWorkspace(result.filePaths[0]) });
+    return hitlStatus();
+  });
+  handle("launcher:hitl-start", async () => {
+    assertHitlSupported();
+    const workspace = validateHitlWorkspace(stateStore.read().hitlWorkspace);
+    await runtimeSupervisor.setTerminalHitlMode(true);
+    const config = runtimeSupervisor.readSetupConfig();
+    if (await runtimeSupervisor.proxyHealth(config)) {
+      throw new Error(`A server is already listening on port ${config.port}; close the existing HITL terminal first`);
+    }
+    launchHitlTerminal({
+      invocation: runtimeHost.command(["serve", "--hitl", "--workspace", workspace]),
+      scriptPath: path.join(CORE_HOME, "runtime", "hitl-terminal.cmd"),
+      environment: { ...process.env, CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: BROWSER_DESCRIPTOR_PATH },
+    });
+    logger.info("launcher.hitl_terminal_started", { workspace });
+    return hitlStatus();
+  });
+  handle("launcher:hitl-disable", async () => {
+    assertHitlSupported();
+    const config = runtimeSupervisor.readSetupConfig();
+    if (runtimeSupervisor.terminalHitlEnabled() && config && await runtimeSupervisor.proxyHealth(config)) {
+      throw new Error("Close the HITL terminal window before leaving HITL mode");
+    }
+    await runtimeSupervisor.setTerminalHitlMode(false);
+    return hitlStatus();
+  });
   handle("launcher:logs", (_event, limit) => logger.recent(limit));
   handle("launcher:export-logs", async () => {
     const date = new Date().toISOString().slice(0, 10);

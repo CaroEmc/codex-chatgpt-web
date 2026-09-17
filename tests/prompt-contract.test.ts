@@ -12,7 +12,7 @@ import {
 import { CHATGPT_WEB_LUNA_MODEL_ID, CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { SUMMARY_PREFIX } from "../src/responses/compaction";
 import { biggerContextPartCount } from "../src/adapters/chatgpt-web/usage";
-import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS } from "../src/hitl/protocol";
+import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS, hitlWorkspaceInstructions } from "../src/hitl/protocol";
 import type { CodexParsedRequest } from "../src/types";
 
 function request(reasoning: "low" | "medium" | "high" | "xhigh" | "max"): CodexParsedRequest {
@@ -659,6 +659,18 @@ test("a browser-only HITL turn teaches the model the [EXEC_REQUEST] protocol", (
   expect(compiled.text).toContain("Do not fabricate outputs.");
   // The protocol block belongs to the transport contract, not the replayed task context.
   expect(compiled.text.indexOf("[EXEC_REQUEST]")).toBeLessThan(compiled.text.indexOf("<codex_context_json>"));
+});
+
+test("a HITL turn tells the model the workspace root its cwd must stay inside", () => {
+  const workspace = "D:\\work\\libbff";
+  const compiled = compileChatGptWebPrompt(
+    request("high"),
+    { localToolsEnabled: false, solAvailable: true, proAvailable: false, extraHighAvailable: false },
+    undefined,
+    { hitlProtocol: true, hitlWorkspaceCwd: workspace },
+  );
+  expect(compiled.text).toContain(hitlWorkspaceInstructions(workspace));
+  expect(compiled.text).toContain(`workspace root for EXEC_REQUEST is: ${workspace}`);
 });
 
 test("a browser-only turn without HITL never mentions the [EXEC_REQUEST] protocol", () => {

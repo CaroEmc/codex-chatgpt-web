@@ -23,6 +23,7 @@ const DEFAULT_STATE = Object.freeze({
   sidebarWidth: 252,
   mcpGuideStep: 0,
   sessionRefreshReminderAt: null,
+  hitlWorkspace: null,
 });
 
 function nextSessionRefreshReminderAt(now = Date.now()) {
@@ -76,6 +77,10 @@ function readState(filePath) {
       && (typeof state.sessionRefreshReminderAt !== "string"
         || !Number.isFinite(Date.parse(state.sessionRefreshReminderAt)))) {
       state.sessionRefreshReminderAt = DEFAULT_STATE.sessionRefreshReminderAt;
+    }
+    if (state.hitlWorkspace !== null
+      && (typeof state.hitlWorkspace !== "string" || !state.hitlWorkspace || state.hitlWorkspace.length > 4096)) {
+      state.hitlWorkspace = DEFAULT_STATE.hitlWorkspace;
     }
     for (const key of [
       "coreSetupComplete",

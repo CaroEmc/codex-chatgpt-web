@@ -32,6 +32,22 @@ function renderProposal(proposal: ExecProposal): string {
   return `${lines.join("\n")}\n> `;
 }
 
+/** Runs every proposal without asking (`serve --hitl --hitl-auto-approve`). The operator opted out
+ * of per-command approval explicitly; each command is still echoed so the terminal keeps an audit
+ * trail, and the workspace cwd boundary in exec.ts still applies before this gateway is reached. */
+export class AutoApproveGateway implements ApprovalGateway {
+  constructor(private readonly output: NodeJS.WritableStream = process.stdout) {}
+
+  async request(proposal: ExecProposal, signal?: AbortSignal): Promise<ApprovalDecision> {
+    if (signal?.aborted) return { action: "reject" };
+    this.output.write(
+      `[hitl] auto-approved${proposal.traceId ? ` (turn ${proposal.traceId})` : ""}: ${proposal.command}\n`
+        + `       dir: ${proposal.cwd}${proposal.reason ? `\n       reason: ${proposal.reason}` : ""}\n`,
+    );
+    return { action: "run", command: proposal.command };
+  }
+}
+
 /** Fails closed (reject, no prompt) whenever the input stream is not an attached
  * terminal, so headless/non-interactive `dev chat` invocations never stall.
  *

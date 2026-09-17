@@ -18,7 +18,7 @@ import {
   type LauncherManualTurnStart,
 } from "../../launcher-browser-host";
 import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
-import { TtyApprovalGateway, type ApprovalGateway } from "../../hitl/approval";
+import { AutoApproveGateway, TtyApprovalGateway, type ApprovalGateway } from "../../hitl/approval";
 import type { ProviderAdapter } from "../base";
 import { parseDataUrl } from "../image";
 import { ChatGptWebAdapterError } from "./adapter-error";
@@ -354,6 +354,7 @@ export function createChatGptWebAdapter(
   const structuredBroker = broker instanceof TurnBroker ? broker : undefined;
   const timeoutMs = provider.chatgptWeb?.turnTimeoutMs;
   const hitlActive = provider.chatgptWeb?.hitlEnabled === true;
+  const hitlWorkspaceCwd = provider.chatgptWeb?.hitlWorkspaceCwd ?? process.cwd();
   const experimentalBiggerContext = provider.chatgptWeb?.experimentalBiggerContext;
   if (experimentalBiggerContext !== undefined && typeof experimentalBiggerContext !== "boolean") {
     throw new Error("ChatGPT Bigger Context preference must be a boolean");
@@ -372,10 +373,13 @@ export function createChatGptWebAdapter(
       : undefined;
   // One gateway, one queue, for every concurrent turn this adapter runs: the daemon has a single
   // stdin, and two readline interfaces on it corrupt each other (see src/hitl/approval.ts).
-  const hitlApprovalGateway = dependencies.hitlApprovalGateway ?? new TtyApprovalGateway();
+  const hitlAutoApprove = provider.chatgptWeb?.hitlAutoApprove === true;
+  const hitlApprovalGateway = dependencies.hitlApprovalGateway
+    ?? (hitlAutoApprove ? new AutoApproveGateway() : new TtyApprovalGateway());
   const hitlApprovals = hitlActive
     ? new HitlApprovalQueue(
-      retainedLauncherDescriptor
+      // Auto-approve never prompts, so there is no decision for a launcher popup to race.
+      retainedLauncherDescriptor && !hitlAutoApprove
         ? withDesktopApproval(hitlApprovalGateway, retainedLauncherDescriptor)
         : hitlApprovalGateway,
     )
@@ -469,7 +473,7 @@ export function createChatGptWebAdapter(
         captureLunaCheckpoint,
         // Without this the model is never told the [EXEC_REQUEST] protocol exists, so the gate
         // below could never fire in a real session.
-        ...(hitlTurnActive ? { hitlProtocol: true } : {}),
+        ...(hitlTurnActive ? { hitlProtocol: true, hitlWorkspaceCwd } : {}),
         ...(experimentalMultipartParts !== undefined
           ? { experimentalMultipartParts }
           : {}),
@@ -733,7 +737,7 @@ export function createChatGptWebAdapter(
         ...(hitlTurnActive ? {
           hitlExecGate: createHitlExecGate({
             approvalGateway: hitlApprovals!.forTurn(traceId),
-            workspaceCwd: provider.chatgptWeb?.hitlWorkspaceCwd ?? process.cwd(),
+            workspaceCwd: hitlWorkspaceCwd,
           }),
         } : {}),
       })), browserAbort);

@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ApprovalGateway, ApprovalDecision, ExecProposal } from "../src/hitl/approval";
-import { EXEC_REJECTED_TEXT } from "../src/hitl/protocol";
-import { HITL_EXEC_TIMEOUT_MS, runApprovedCommand } from "../src/hitl/exec";
+import { AutoApproveGateway, type ApprovalGateway, type ApprovalDecision, type ExecProposal } from "../src/hitl/approval";
+import { EXEC_REJECTED_TEXT, formatCwdOutsideWorkspace } from "../src/hitl/protocol";
+import { composerSafeOutput, HITL_EXEC_TIMEOUT_MS, runApprovedCommand } from "../src/hitl/exec";
 
 class FixedGateway implements ApprovalGateway {
   seen: ExecProposal[] = [];
@@ -18,8 +18,9 @@ class FixedGateway implements ApprovalGateway {
 test("an approved command runs and its output is wrapped in EXEC_RESULT", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
   try {
-    const gateway = new FixedGateway({ action: "run", command: "printf hello" });
-    const result = await runApprovedCommand(gateway, { command: "printf hello" }, workspace);
+    const cmd = process.platform === "win32" ? "bun -e \"process.stdout.write('hello')\"" : "printf hello";
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const result = await runApprovedCommand(gateway, { command: cmd }, workspace);
     expect(result).toBe("[EXEC_RESULT]\nexit_code: 0\noutput:\nhello\n[/EXEC_RESULT]");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
@@ -76,7 +77,22 @@ test("a cwd escaping the workspace is rejected before reaching approval", async 
   try {
     const gateway = new FixedGateway({ action: "run", command: "pwd" });
     const result = await runApprovedCommand(gateway, { command: "pwd", cwd: "../../etc" }, workspace);
-    expect(result).toBe(EXEC_REJECTED_TEXT);
+    expect(result).toBe(formatCwdOutsideWorkspace("../../etc", workspace));
+    expect(result).not.toBe(EXEC_REJECTED_TEXT);
+    expect(result).toContain(workspace);
+    expect(gateway.seen).toHaveLength(0);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("an absolute cwd outside the workspace is blocked with guidance to use a relative path", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const gateway = new FixedGateway({ action: "run", command: "ls" });
+    const result = await runApprovedCommand(gateway, { command: "ls", cwd: "/doc" }, workspace);
+    expect(result).toContain("did not reject");
+    expect(result).toContain("relative");
     expect(gateway.seen).toHaveLength(0);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
@@ -122,3 +138,98 @@ test("the exec timeout has enough margin for a delegated codex exec sub-task, no
   expect(HITL_EXEC_TIMEOUT_MS).toBe(600_000);
   expect(HITL_EXEC_TIMEOUT_MS).toBeGreaterThan(290_779);
 });
+
+test("AutoApproveGateway runs the proposed command and echoes it", async () => {
+  const written: string[] = [];
+  const output = { write: (chunk: string) => { written.push(chunk); return true; } } as unknown as NodeJS.WritableStream;
+  const gateway = new AutoApproveGateway(output);
+  const decision = await gateway.request({ command: "rg -l libbff doc", cwd: "D:/work", reason: "search", traceId: "t1" });
+  expect(decision).toEqual({ action: "run", command: "rg -l libbff doc" });
+  expect(written.join("")).toContain("auto-approved (turn t1): rg -l libbff doc");
+});
+
+test("AutoApproveGateway still rejects a proposal whose turn is already cancelled", async () => {
+  const gateway = new AutoApproveGateway({ write: () => true } as unknown as NodeJS.WritableStream);
+  const controller = new AbortController();
+  controller.abort();
+  expect(await gateway.request({ command: "ls", cwd: "." }, controller.signal)).toEqual({ action: "reject" });
+});
+
+test("an auto-approved command is still confined to the workspace", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const gateway = new AutoApproveGateway({ write: () => true } as unknown as NodeJS.WritableStream);
+    const result = await runApprovedCommand(gateway, { command: "ls", cwd: "../.." }, workspace);
+    expect(result).toContain("outside the workspace root");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("CRLF command output is normalized so the ChatGPT composer preserves the follow-up verbatim", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const cmd = "bun -e \"process.stdout.write('a.md' + String.fromCharCode(13, 10) + 'b.md' + String.fromCharCode(13, 10))\"";
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const result = await runApprovedCommand(gateway, { command: cmd }, workspace);
+    expect(result).toBe("[EXEC_RESULT]\nexit_code: 0\noutput:\na.md\nb.md\n\n[/EXEC_RESULT]");
+    expect(result).not.toContain(String.fromCharCode(13));
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a multi-byte character split across output chunks is decoded intact", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const script = "const b=Buffer.from('文件.md');process.stdout.write(b.subarray(0,2));setTimeout(()=>process.stdout.write(b.subarray(2)),50)";
+    const cmd = `bun -e "${script}"`;
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const result = await runApprovedCommand(gateway, { command: cmd }, workspace);
+    expect(result).toContain("output:\n文件.md\n");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("composerSafeOutput rewrites characters the ChatGPT composer would silently substitute", () => {
+  const cr = String.fromCharCode(13);
+  const input = ["a", cr, "\n", "\t", "b", "\u00A0", "\u3000", "c", "\uFEFF", "\u200B", "d", "\x1b[31m", "e", "\x07"].join("");
+  expect(composerSafeOutput(input)).toBe("a\n    b  cde");
+  expect(composerSafeOutput("文件.md\n")).toBe("文件.md\n");
+});
+
+test("a command that falls back to reading stdin sees EOF instead of hanging", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const cmd = `bun -e "process.stdin.resume();process.stdin.on('end',()=>console.log('stdin-eof'))"`;
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const started = Date.now();
+    const result = await runApprovedCommand(gateway, { command: cmd }, workspace, { timeoutMs: 15_000 });
+    expect(result).toContain("stdin-eof");
+    expect(result).toContain("exit_code: 0");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("a timeout kills the whole process tree, not just the shell", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const marker = join(workspace, "grandchild-survived.txt");
+    const grandchild = `setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'x'),3000)`;
+    const parent = `const c=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'ignore'});setInterval(()=>{},1000)`;
+    const script = join(workspace, "parent.cjs");
+    writeFileSync(script, parent);
+    const cmd = `bun ${JSON.stringify(script)}`;
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const result = await runApprovedCommand(gateway, { command: cmd }, workspace, { timeoutMs: 1_000 });
+    expect(result).toContain("exit_code: 124");
+    expect(result).toContain("timed out after 1000ms");
+    await new Promise(resolveWait => setTimeout(resolveWait, 4_000));
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}, 20_000);

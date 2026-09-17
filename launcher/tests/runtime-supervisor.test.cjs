@@ -2037,3 +2037,131 @@ server.listen(config.port, config.host);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("launcher supervisor leaves daemon unspawned and reports ready when hitlEnabled is true", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-hitl-supervisor-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  const config = launcherConfig(descriptorPath, {
+    mode: "browser-only",
+    hitlEnabled: true,
+  });
+  fs.writeFileSync(path.join(root, "config.json"), `${JSON.stringify(config)}\n`);
+  let daemonStarts = 0;
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  supervisor.startDaemon = async () => {
+    daemonStarts += 1;
+  };
+
+  try {
+    const runtime = await supervisor.startConfigured();
+    assert.equal(runtime.status, "ready");
+    assert.equal(runtime.daemonPid, null);
+    assert.equal(runtime.tunnelPid, null);
+    assert.equal(daemonStarts, 0);
+    assert.equal(await supervisor.ownedRuntimeReady(config), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("setTerminalHitlMode persists the flag, preserves other config, and restarts only on change", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-hitl-toggle-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  const configPath = path.join(root, "config.json");
+  const config = launcherConfig(descriptorPath, { mode: "browser-only", hitlEnabled: false });
+  fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`);
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  let restarts = 0;
+  supervisor.restart = async () => { restarts += 1; };
+
+  try {
+    assert.equal(supervisor.terminalHitlEnabled(), false);
+    await supervisor.setTerminalHitlMode(true);
+    const written = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    assert.equal(written.hitlEnabled, true);
+    assert.equal(written.port, config.port);
+    assert.equal(supervisor.terminalHitlEnabled(), true);
+    assert.equal(restarts, 1);
+    await supervisor.setTerminalHitlMode(true);
+    assert.equal(restarts, 1);
+    await supervisor.setTerminalHitlMode(false);
+    assert.equal(JSON.parse(fs.readFileSync(configPath, "utf8")).hitlEnabled, false);
+    assert.equal(restarts, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("setTerminalHitlMode refuses full mode and a missing config", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-hitl-toggle-full-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  supervisor.restart = async () => assert.fail("must not restart");
+  try {
+    await assert.rejects(() => supervisor.setTerminalHitlMode(true), /Complete setup/);
+    fs.writeFileSync(
+      path.join(root, "config.json"),
+      `${JSON.stringify(launcherConfig(descriptorPath, { mode: "full" }))}\n`,
+    );
+    await assert.rejects(() => supervisor.setTerminalHitlMode(true), /browser-only/);
+    assert.equal(supervisor.terminalHitlEnabled(), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("launcher supervisor recover skips daemon spawning when hitlEnabled is true", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-hitl-recover-"));
+  const descriptorPath = path.join(root, "runtime", "launcher-browser.json");
+  fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+  fs.writeFileSync(descriptorPath, "{}\n");
+  const config = launcherConfig(descriptorPath, {
+    mode: "browser-only",
+    hitlEnabled: true,
+  });
+  fs.writeFileSync(path.join(root, "config.json"), `${JSON.stringify(config)}\n`);
+  let daemonStarts = 0;
+  const supervisor = new RuntimeSupervisor({
+    app: { getVersion: () => "0.2.0", isPackaged: false },
+    logger: { info() {}, warn() {}, error() {} },
+    sourceRoot: root,
+    coreHome: root,
+    browserDescriptorPath: descriptorPath,
+  });
+  supervisor.startDaemon = async () => {
+    daemonStarts += 1;
+  };
+  supervisor.proxyHealth = async () => false;
+
+  try {
+    await supervisor.recover("daemon");
+    assert.equal(daemonStarts, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+

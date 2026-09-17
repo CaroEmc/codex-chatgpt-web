@@ -2,8 +2,8 @@
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { existsSync, rmSync, statSync } from "node:fs";
+import { basename, isAbsolute, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import { captureSystemBrowserLoginToFile, checkBrowserEngine, loginToChatGpt } from "./browser-login";
 import { defaultConfig, getConfigDir, getConfigPath, loadConfig, loadConfigForSetup } from "./config";
@@ -24,12 +24,14 @@ import { formatDoctorReport, runDoctor } from "./doctor";
 import { runChatGptMcpMain } from "./adapters/chatgpt-web/mcp-main";
 import { runCommand } from "./process";
 import { startServer } from "./server";
+import { ensureLauncherBrowserHost } from "./hitl/launcher-autostart";
 import { assertServiceIdle, cancelActiveTurns, getServiceStatus, installService, interruptActiveTurn, restartService, startService, stopService, uninstallService } from "./service";
 import { existingFullSetupCredentials, preflightSetup, setup, type SetupOptions } from "./setup";
 import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus, waitForTunnelReady } from "./tunnel";
 import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
 import { runDevCommand } from "./dev-chat/cli";
+import { prepareWorkingTreeBrowserHelper } from "./dev-chat/driver";
 
 const HELP = `codex-chatgpt-web ${VERSION}
 
@@ -48,7 +50,7 @@ Usage:
   codex-chatgpt-web dev setup <--browser-only|--full> [options]
   codex-chatgpt-web dev chat NAME [--model MODEL] [MESSAGE]
   codex-chatgpt-web dev list
-  codex-chatgpt-web serve [--hitl]
+  codex-chatgpt-web serve [--hitl [--workspace DIR] [--hitl-auto-approve]]
   codex-chatgpt-web mcp [--broker-socket PATH]
   codex-chatgpt-web service <status|install|start|restart|stop|cancel-turns>
   codex-chatgpt-web tunnel <status|start|restart|stop|key-import>
@@ -59,6 +61,8 @@ Setup options:
   --browser-only               Account-eligible Web models, full context/images, no local tools or tunnel
   --full                       Account-eligible Web models with tools through the configured connector
   --hitl                        Enable human-in-the-loop local exec (browser-only mode, foreground only)
+  --workspace DIR              serve --hitl: confine local exec to DIR (default: current directory)
+  --hitl-auto-approve          serve --hitl: run every requested command without asking (dangerous)
   --automatic-browser-interaction
                                Send prompts and read ChatGPT state through browser automation (default)
   --zero-risk-browser-interaction
@@ -596,10 +600,51 @@ async function main(): Promise<void> {
     }
   } else if (command === "serve") {
     const hitlRequested = takeFlag(args, "--hitl");
+    const workspace = takeOption(args, "--workspace");
+    const autoApprove = takeFlag(args, "--hitl-auto-approve");
     assertNoArgs(args);
     const config = loadConfig();
+    if (autoApprove) {
+      if (!hitlRequested) throw new Error("--hitl-auto-approve requires --hitl");
+      config.hitlAutoApprove = true;
+    }
+    // A source-checkout daemon would otherwise drive the browser through the helper bundled with the
+    // installed launcher, silently ignoring every browser-worker change in this working tree.
+    if (config.browserHost === "launcher" && basename(process.argv[1] ?? "") === "cli.ts") {
+      const helper = prepareWorkingTreeBrowserHelper();
+      if (helper) {
+        config.browserHelperScriptPath = helper;
+        stdout.write(`[serve] using browser helper built from this checkout: ${helper}\n`);
+      }
+    }
+    if (workspace !== undefined) {
+      if (!hitlRequested) throw new Error("--workspace requires --hitl");
+      const resolvedWorkspace = resolve(workspace);
+      if (!existsSync(resolvedWorkspace) || !statSync(resolvedWorkspace).isDirectory()) {
+        throw new Error(`--workspace is not a directory: ${resolvedWorkspace}`);
+      }
+      config.hitlWorkspaceCwd = resolvedWorkspace;
+    }
     const server = startServer(config, { hitlRequested });
     stdout.write(`codex-chatgpt-web ${VERSION} listening on http://${config.host}:${server.port}/v1 (${config.mode})\n`);
+    if (config.hitlEnabled) {
+      stdout.write(`[hitl] workspace root: ${config.hitlWorkspaceCwd ?? process.cwd()}\n`);
+      if (config.hitlAutoApprove) {
+        stdout.write("[hitl] WARNING: auto-approve is on; every command the model requests runs without asking\n");
+      }
+      if (config.browserHost === "launcher" && config.browserHostDescriptorPath) {
+        try {
+          const launcher = await ensureLauncherBrowserHost(config.browserHostDescriptorPath);
+          stdout.write(launcher === "started"
+            ? "[hitl] started the Codex Web GPT launcher to host the ChatGPT browser\n"
+            : "[hitl] Codex Web GPT launcher is running\n");
+        } catch (error) {
+          stdout.write(
+            `[hitl] WARNING: the Codex Web GPT launcher is not available, so turns will fail until you open it: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
+      }
+    }
     await new Promise<void>(() => {});
   } else if (command === "dev") await runDevCommand(args);
   else if (command === "mcp") await runChatGptMcpMain(args);

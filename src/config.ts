@@ -68,6 +68,12 @@ export interface AppConfig {
   releaseVersion: string;
   mode: RuntimeMode;
   hitlEnabled: boolean;
+  /** Runtime-only override (`serve --workspace`) for the HITL exec workspace root; defaults to process.cwd(). */
+  hitlWorkspaceCwd?: string;
+  /** Runtime-only (`serve --hitl-auto-approve`): run HITL commands without per-command approval. */
+  hitlAutoApprove?: boolean;
+  /** Runtime-only: browser helper built from this source checkout, used instead of the launcher's bundled one. */
+  browserHelperScriptPath?: string;
   subagentProtocol: SubagentProtocol;
   host: "127.0.0.1";
   port: number;
@@ -555,7 +561,14 @@ function parseConfig(value: unknown, path: string): AppConfig {
 export function saveConfig(config: AppConfig): void {
   const path = getConfigPath();
   const original = existsSync(path) ? readFileSync(path, "utf8") : "";
-  atomicWriteFile(path, preserveUtf8Bom(`${JSON.stringify(config, null, 2)}\n`, original));
+  // `hitlWorkspaceCwd` belongs to one `serve` process, never to the persisted profile.
+  const {
+    hitlWorkspaceCwd: _runtimeOnly,
+    hitlAutoApprove: _runtimeOnlyApproval,
+    browserHelperScriptPath: _runtimeOnlyHelper,
+    ...persisted
+  } = config;
+  atomicWriteFile(path, preserveUtf8Bom(`${JSON.stringify(persisted, null, 2)}\n`, original));
 }
 
 export function providerConfig(config: AppConfig): CodexProviderConfig {
@@ -606,7 +619,9 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       ...(config.stallTimeoutSec !== undefined ? { stallTimeoutSec: config.stallTimeoutSec } : {}),
       autoApproveToolCalls: manual ? false : config.autoApproveToolCalls,
       hitlEnabled: config.hitlEnabled,
-      hitlWorkspaceCwd: process.cwd(),
+      hitlWorkspaceCwd: config.hitlWorkspaceCwd ?? process.cwd(),
+      hitlAutoApprove: config.hitlAutoApprove === true,
+      ...(config.browserHelperScriptPath ? { browserHelperScriptPath: config.browserHelperScriptPath } : {}),
     },
   };
 }

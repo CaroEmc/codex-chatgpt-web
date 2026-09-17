@@ -268,6 +268,9 @@ function validateConfig(config, descriptorPath, platform = process.platform, lau
   if (config.proAvailable && !config.solAvailable) {
     throw new Error("Runtime configuration cannot enable Pro without Sol");
   }
+  if (config.hitlEnabled !== undefined && typeof config.hitlEnabled !== "boolean") {
+    throw new Error("Runtime configuration has an invalid hitlEnabled");
+  }
   if (!Array.isArray(config.runtimeCommand)
     || config.runtimeCommand.length === 0
     || config.runtimeCommand.some(part => typeof part !== "string" || !part.trim())) {
@@ -1129,6 +1132,10 @@ class RuntimeSupervisor {
   }
 
   async startDaemon(config) {
+    if (config.mode === "browser-only" && config.hitlEnabled === true) {
+      this.logger.info("runtime.start_daemon_skipped_for_terminal_hitl");
+      return;
+    }
     if (this.daemon) {
       const child = this.daemon;
       const identity = Number.isInteger(child.pid)
@@ -1197,11 +1204,14 @@ class RuntimeSupervisor {
       this.clearState();
       return { status: "not-configured" };
     }
-    const tunnelOnly = this.launcherProfile === "development";
+    const terminalHitl = config.mode === "browser-only" && config.hitlEnabled === true;
+    const tunnelOnly = this.launcherProfile === "development" || terminalHitl;
     if (tunnelOnly && config.mode !== "full") {
       const ownershipState = this.readState();
       if (runtimeOwnershipMayBeLive(ownershipState)) {
-        const detail = "A DEV MCP runtime is still owned while the profile is configured as browser-only";
+        const detail = terminalHitl
+          ? "A runtime is still owned while terminal HITL mode is active"
+          : "A DEV MCP runtime is still owned while the profile is configured as browser-only";
         this.writeExternalState(detail);
         return { status: "external", detail };
       }
@@ -1330,9 +1340,26 @@ class RuntimeSupervisor {
     const config = this.readConfig();
     if (!config) return;
     this.publishOperation?.({ name: "runtime-recovery", status: "running", message: `Restarting ${name}` });
-    const tunnelOnly = this.launcherProfile === "development";
+    const terminalHitl = config.mode === "browser-only" && config.hitlEnabled === true;
+    const tunnelOnly = this.launcherProfile === "development" || terminalHitl;
     if (name === "tunnel") {
       await this.startTunnel(config, "runtime-recovery", { forceRestart: true });
+    }
+    else if (terminalHitl) {
+      const healthyRuntime = await this.proxyHealth(config);
+      if (healthyRuntime) {
+        this.logger.info("runtime.recovery_yielded_to_terminal_hitl", { port: config.port });
+        this.daemon = null;
+        this.writeExternalState("Terminal HITL runtime is active");
+        this.publishOperation?.({
+          name: "runtime-recovery",
+          status: "completed",
+          message: "Terminal HITL runtime is active",
+        });
+        return;
+      }
+      this.logger.info("runtime.recovery_skipped_for_terminal_hitl");
+      return;
     }
     else if (tunnelOnly) throw new Error("DEV runtime cannot recover a Responses daemon");
     else await this.startDaemon(config);
@@ -1415,7 +1442,7 @@ class RuntimeSupervisor {
   }
 
   async ownedRuntimeReady(config) {
-    if (this.launcherProfile === "development") {
+    if (this.launcherProfile === "development" || (config.mode === "browser-only" && config.hitlEnabled === true)) {
       return config.mode !== "full" || Boolean(this.tunnel && await this.tunnelHealth(config));
     }
     const daemon = this.daemon;
@@ -1715,9 +1742,14 @@ class RuntimeSupervisor {
       this.clearState();
       return false;
     }
-    const tunnelOnly = this.launcherProfile === "development";
+    const terminalHitl = config.mode === "browser-only" && config.hitlEnabled === true;
+    const tunnelOnly = this.launcherProfile === "development" || terminalHitl;
     if (tunnelOnly && processRunning(state.daemonPid)) {
-      throw new Error("DEV launcher ownership unexpectedly contains a Responses daemon");
+      throw new Error(
+        terminalHitl
+          ? "Terminal HITL ownership unexpectedly contains a Responses daemon"
+          : "DEV launcher ownership unexpectedly contains a Responses daemon",
+      );
     }
     const health = tunnelOnly ? null : await this.proxyHealthPayload(config);
     const daemonRunning = health?.service === "codex-chatgpt-web"
@@ -1952,7 +1984,8 @@ class RuntimeSupervisor {
     let tunnelStopped = false;
     try {
       const ownershipState = this.readState();
-      const healthyRuntime = config && this.launcherProfile !== "development"
+      const terminalHitl = config?.mode === "browser-only" && config?.hitlEnabled === true;
+      const healthyRuntime = config && this.launcherProfile !== "development" && !terminalHitl
         ? await this.proxyHealth(config)
         : false;
       const runtimeMayBeLive = healthyRuntime || runtimeOwnershipMayBeLive(ownershipState);
@@ -2037,6 +2070,25 @@ class RuntimeSupervisor {
   async restart() {
     await this.stopForSetup();
     return this.startIfConfigured();
+  }
+
+  /** Terminal HITL mode means the launcher yields port ownership to a foreground `serve --hitl`
+   * process instead of supervising its own daemon; the flag lives in the runtime config. */
+  terminalHitlEnabled() {
+    const config = this.readSetupConfig();
+    return Boolean(config && config.mode === "browser-only" && config.hitlEnabled === true);
+  }
+
+  async setTerminalHitlMode(enabled) {
+    const setupConfig = this.readSetupConfig();
+    if (!setupConfig) throw new Error("Complete setup before using HITL");
+    if (setupConfig.mode !== "browser-only") throw new Error("HITL requires browser-only mode");
+    const raw = readJson(this.configPath);
+    if ((raw.hitlEnabled === true) === (enabled === true)) return;
+    raw.hitlEnabled = enabled === true;
+    writePrivateFileAtomic(this.configPath, `${JSON.stringify(raw, null, 2)}\n`);
+    this.logger.info("runtime.terminal_hitl_mode_changed", { enabled: enabled === true });
+    await this.restart();
   }
 
   async forceStopOwnedRuntime(reason) {

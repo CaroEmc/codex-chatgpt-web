@@ -33,6 +33,7 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       sidebarWidth: 252,
       mcpGuideStep: 0,
       sessionRefreshReminderAt: null,
+      hitlWorkspace: null,
     });
     store.update({
       language: "zh-CN",
@@ -59,6 +60,7 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       sidebarWidth: 252,
       mcpGuideStep: 0,
       sessionRefreshReminderAt: null,
+      hitlWorkspace: null,
     });
     if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o077, 0);
     assert.equal(fs.readdirSync(root).some(name => name.includes(".tmp-")), false);
@@ -135,6 +137,7 @@ test("persisted sidebar corruption is repaired without changing the rest of laun
       sidebarWidth: 252,
       mcpGuideStep: 0,
       sessionRefreshReminderAt: null,
+      hitlWorkspace: null,
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

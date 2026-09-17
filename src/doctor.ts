@@ -36,6 +36,7 @@ function secureFile(path: string): boolean {
 
 function launcherOwnershipError(config: AppConfig, health: Record<string, unknown>): string | undefined {
   if (config.browserHost !== "launcher") return undefined;
+  if (config.mode === "browser-only" && config.hitlEnabled === true) return undefined;
   const path = join(getConfigDir(), "runtime", "launcher-supervisor.json");
   if (!existsSync(path)) return `Launcher runtime ownership marker is missing: ${path}`;
   let state: Record<string, unknown>;
@@ -166,7 +167,13 @@ export async function runDoctor(): Promise<DoctorReport> {
           message: "A legacy OS background service still exists; rerun launcher setup to migrate ownership",
           detail: JSON.stringify(service),
         }
-      : { id: "service", status: "ok", message: "Launcher owns the background runtime" });
+      : {
+          id: "service",
+          status: "ok",
+          message: config.mode === "browser-only" && config.hitlEnabled === true
+            ? "Launcher hosts the browser session (foreground HITL server)"
+            : "Launcher owns the background runtime",
+        });
   } else if (!service.supported) {
     checks.push({ id: "service", status: "warning", message: "Managed service is unavailable on this OS; keep `serve` running manually" });
   } else if (!service.installed || !service.loaded) {

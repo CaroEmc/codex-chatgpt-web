@@ -14,7 +14,7 @@ import {
   CHATGPT_LUNA_CHECKPOINT_MARKER,
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
 } from "./rolling-checkpoint";
-import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS } from "../../hitl/protocol";
+import { DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS, hitlWorkspaceInstructions } from "../../hitl/protocol";
 
 export interface ChatGptWebPromptImage {
   ref: string;
@@ -37,6 +37,8 @@ export interface CompileChatGptWebPromptOptions {
    * that `hitlExecGate` intercepts (browser-only `--hitl` sessions only). Without it the gate can
    * never fire, because the model was never told to emit the block. */
   hitlProtocol?: boolean;
+  /** Absolute workspace root the HITL exec gate bounds `cwd` to; told to the model with `hitlProtocol`. */
+  hitlWorkspaceCwd?: string;
   experimentalMultipartParts?: ChatGptWebMultipartPartCount;
   /**
    * Manual Zero Risk transport keeps ChatGPT model/effort selection and prompt submission under the
@@ -523,7 +525,13 @@ export function compileChatGptWebPrompt(
       `This is ChatGPT Web ${mode.displayLabel} with no Codex Native bridge to the user's local computer attached to this response. This restriction applies only to local Codex files, commands, processes, and computer mutations.`,
       "Use any ChatGPT-native capabilities available in this chat—including web search, browsing, research, and other first-party tools—whenever they help complete the request. The missing local-computer bridge says nothing about whether those ChatGPT capabilities are available.",
       "The task history below already contains everything Codex collected from the user's local workspace. Treat prior local tool results as authoritative snapshots of that earlier work.",
-      "Do not claim a new local inspection, command, edit, or verification unless it actually appears in the task history. If the latest request requires fresh local-computer access or a local mutation, state only that exact limitation instead of inventing success.",
+      ...(hitlProtocol
+        ? [
+          "When the task requires reading files, running commands, inspecting the workspace, or executing tests, do not give up or refuse; use the [EXEC_REQUEST] protocol below to request command execution from the operator.",
+        ]
+        : [
+          "Do not claim a new local inspection, command, edit, or verification unless it actually appears in the task history. If the latest request requires fresh local-computer access or a local mutation, state only that exact limitation instead of inventing success.",
+        ]),
       "Otherwise perform the full requested research, analysis, or synthesis with every capability actually available to you; do not stop at a plan or progress report.",
     ];
   const outputControlContract = parsed._compactionRequest
@@ -559,7 +567,10 @@ export function compileChatGptWebPrompt(
     ]
     : [];
   const hitlProtocolContract = hitlProtocol
-    ? [DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS]
+    ? [
+      DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS,
+      ...(options?.hitlWorkspaceCwd ? [hitlWorkspaceInstructions(options.hitlWorkspaceCwd)] : []),
+    ]
     : [];
   const manualControlContract = manualControl
     ? [

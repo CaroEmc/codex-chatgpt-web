@@ -288,6 +288,8 @@ export interface CodexProviderConfig {
     hitlEnabled?: boolean;
     /** Workspace root EXEC_REQUEST cwd resolution is bounded to. Defaults to process.cwd(). */
     hitlWorkspaceCwd?: string;
+    /** Runs every HITL EXEC_REQUEST without asking (`serve --hitl-auto-approve`). */
+    hitlAutoApprove?: boolean;
     /**
      * Seconds of adapter silence before the Responses bridge cancels a turn as a hung upstream.
      * The adapter heartbeats every CHATGPT_WEB_ADAPTER_HEARTBEAT_MS for the whole of a turn, so a
