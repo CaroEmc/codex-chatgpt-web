@@ -109,6 +109,45 @@ Zero Risk 不读取或操作 ChatGPT 页面。请自行选择模型和 `Codex Ze
 </details>
 
 <details>
+<summary><strong>仅浏览器本地执行（HITL）</strong></summary>
+
+<a id="hitl"></a>
+
+当 MCP 隧道不可用时（例如被网络屏蔽），`--hitl` 可让仅浏览器会话改为直接从终端运行本地
+shell 命令，并对每一条命令都需要你的明确批准：
+
+```bash
+codex-chatgpt-web setup --browser-only --acknowledge-unofficial
+codex-chatgpt-web serve --hitl
+```
+
+`--hitl` 需要同时使用 `--browser-only`（Full harness 模式已经可以通过 MCP 进行真正的工具调用），
+且只有在前台运行并连接了 TTY 时才会激活——在其他任何情况下（例如作为后台服务运行）都会 fail-closed
+（不执行任何命令）。
+
+激活后，模型可以通过发出 `[EXEC_REQUEST]` 块来请求运行一条命令；终端会显示
+**AI EXECUTION PROPOSAL**，并等待你按 Enter 或 `y` 来运行、按 `n` 或 Esc 拒绝，或按 `c` 先编辑该
+命令。未经这一逐条命令的批准，任何操作都不会执行。
+
+这种传输方式没有 MCP 子代理工具，因此模型会被指示改为通过非交互方式运行已批准的 `codex exec`
+shell 命令来委派独立的子任务（例如对单个文件进行范围受限的代码审查），并通过第二次
+`[EXEC_REQUEST]` 读回结果。
+
+**当前限制：**
+
+- **具有写入能力，且不会按内容进行沙箱化。** 该执行通道会运行你批准的任何命令——包括破坏性命令
+  （`rm`、`git commit`、`sed -i` 等）——并对文件系统产生真实影响。唯一内置的限制是命令被限定在
+  已配置的工作区目录内，并且每一条命令都需要你的明确批准；没有自动的只读强制或命令黑名单。
+- **每条命令 10 分钟超时、10KB 输出上限。** 长时间运行或输出较多的命令会被截断；应将委派的子任务
+  范围限定得很窄（一个文件或一个问题，而不是完整审计）。
+- **仅支持单行命令。** `command:` 字段会作为单行解析，因此委派任务的提示词必须用单引号包裹，且
+  不能包含换行符或单引号。
+- **信号传播尚未验证。** 超时会向命令的 shell 进程发送 SIGTERM，但这是否能可靠地传达到嵌套的
+  `codex exec` 所派生的所有进程，尚未得到独立确认。
+
+</details>
+
+<details>
 <summary><strong>诊断与子代理</strong></summary>
 
 <a id="operations"></a>
