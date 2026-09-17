@@ -92,8 +92,14 @@ try {
     "The installer is not code-signed; verify it against checksums.txt."
   ) -join "`n"
 
+  # Windows PowerShell 5.1 turns a native command's stderr into a terminating error under
+  # ErrorActionPreference=Stop, so probe for the release with Stop relaxed.
+  $SavedPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   & gh release view $Tag -R $Repository *> $null
-  if ($LASTEXITCODE -ne 0) {
+  $ReleaseExists = $LASTEXITCODE -eq 0
+  $ErrorActionPreference = $SavedPreference
+  if (-not $ReleaseExists) {
     Write-Host "Creating release $Tag in $Repository ..." -ForegroundColor Cyan
     $TargetArgs = @()
     if ($Target) { $TargetArgs = @("--target", $Target) }
