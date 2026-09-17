@@ -3,17 +3,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">All releases</a>
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">All releases</a>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
 </p>
 
 <p align="center">
@@ -178,6 +178,38 @@ There is no MCP subagent tool available over this transport, so the model is ins
 delegate independent sub-tasks by running `codex exec` non-interactively as an approved shell
 command (e.g. a scoped code review of one file), reading the result back with a second
 `[EXEC_REQUEST]`.
+
+If you're working from this repo (e.g. testing a fork with local changes not yet in an official
+release), build and install both pieces from source instead of downloading the prebuilt release
+binaries above, so the installed `codex-chatgpt-web` and **Codex Web GPT** actually reflect your
+changes:
+
+```bash
+./scripts/install-local.sh
+./scripts/install-launcher-local.sh
+```
+
+Skip this and use an official release if you don't have local changes to test; everything below
+applies either way.
+
+**Quick start, running the launcher app alongside `--hitl`:**
+
+1. Make sure the setup command above has run at least once. If this machine's config already uses
+   the launcher's own browser (the case if you've used the packaged app before), run it with the
+   launcher open — setup inspects the launcher's account/model capabilities and fails if it isn't
+   running. This is a one-time step; skip it if you've already completed it.
+2. In the launcher's Preferences, turn off **Open at login** and quit it, so it can't silently
+   start its own background daemon (which can't do HITL — it has no attached TTY) before you get
+   a chance to start your own.
+3. With the launcher closed, open a terminal in this repo and run `codex-chatgpt-web serve --hitl`,
+   leaving it running in the foreground; run it again from the repo directory at the start of every
+   session.
+4. Start **Codex Web GPT** as usual: sign in, let the browser smoke test finish, and install
+   models. It detects that a runtime is already listening and won't start a conflicting one of its
+   own — any warning about that is expected and can be ignored. Keep it running alongside the
+   worker.
+5. Open the Codex CLI, pick a ChatGPT Web model, and its tool calls now arrive as
+   `[EXEC_REQUEST]` prompts in the terminal running `serve --hitl`.
 
 **Current limitations:**
 

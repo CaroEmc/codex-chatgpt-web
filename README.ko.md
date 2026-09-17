@@ -3,17 +3,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">모든 릴리스</a>
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">모든 릴리스</a>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
 </p>
 
 <p align="center">
@@ -106,6 +106,77 @@ inbound 포트를 열거나 라우터 포트 포워딩을 설정할 필요가 �
 참고하세요. `--auto-approve-tool-calls`를 명시적으로 활성화하지 않은 상태에서 예상치 못한 승인
 프롬프트가 나타나면 fail-closed로 처리됩니다. 이 옵션은 **Allow once**만 클릭하며 영구 권한은
 부여하지 않습니다.
+
+</details>
+
+<details>
+<summary><strong>브라우저 전용 로컬 실행 (HITL)</strong></summary>
+
+<a id="hitl"></a>
+
+MCP 터널을 사용할 수 없는 경우(예: 네트워크에서 차단된 경우), `--hitl`을 사용하면 브라우저 전용
+세션이 터미널에서 직접 로컬 셸 명령을 실행할 수 있으며, 명령마다 사용자의 명시적 승인을 거칩니다:
+
+```bash
+codex-chatgpt-web setup --browser-only --acknowledge-unofficial
+codex-chatgpt-web serve --hitl
+```
+
+`--hitl`은 `--browser-only`를 필요로 합니다(Full harness 모드는 이미 MCP를 통해 실제 도구 호출을
+사용할 수 있습니다). 또한 포그라운드에서 TTY가 연결된 경우에만 활성화되며, 백그라운드 서비스로
+실행하는 등 다른 조건에서는 fail-closed(실행 없음) 상태가 됩니다.
+
+활성화되면 모델은 `[EXEC_REQUEST]` 블록을 통해 명령 실행을 요청할 수 있습니다. 터미널에는
+**AI EXECUTION PROPOSAL**이 표시되고, 실행하려면 Enter 또는 `y`, 거부하려면 `n` 또는 Esc,
+명령을 먼저 편집하려면 `c`를 누를 때까지 대기합니다. 이 명령별 승인 없이는 아무것도 실행되지 않습니다.
+
+이 전송 방식에는 MCP 서브에이전트 도구가 없으므로, 모델은 대신 승인된 셸 명령으로 `codex exec`를
+비대화형으로 실행하여 독립적인 하위 작업을 위임하도록 지시받습니다(예: 파일 하나에 대한 범위가
+제한된 코드 리뷰). 결과는 두 번째 `[EXEC_REQUEST]`로 다시 읽어옵니다.
+
+이 저장소에서 작업하는 경우(예: 아직 공식 릴리스에 포함되지 않은 로컬 변경 사항이 있는 포크를
+테스트하는 경우), 위의 사전 빌드된 바이너리를 내려받는 대신 두 가지 모두를 소스에서 빌드하고
+설치하세요. 그러면 설치된 `codex-chatgpt-web`과 **Codex Web GPT**에 실제로 여러분의 변경 사항이
+반영됩니다:
+
+```bash
+./scripts/install-local.sh
+./scripts/install-launcher-local.sh
+```
+
+테스트할 로컬 변경 사항이 없다면 이 단계를 건너뛰고 공식 릴리스를 사용하세요. 아래 내용은 두
+경우 모두에 적용됩니다.
+
+**빠른 시작 (런처 앱과 `--hitl`을 함께 사용하는 경우):**
+
+1. 위의 setup 명령을 최소 한 번은 실행해 두세요. 이 컴퓨터의 설정이 이미 런처 자체의 브라우저를
+   사용하고 있다면(패키지 앱을 이전에 사용한 적이 있다면 해당됩니다), 런처를 켜 둔 상태에서
+   실행하세요 — setup은 런처의 계정/모델 기능을 검사하며, 런처가 실행 중이지 않으면 실패합니다.
+   이는 한 번만 하면 되는 작업이므로, 이미 완료했다면 건너뛰어도 됩니다.
+2. 런처의 환경설정에서 **로그인 시 열기**를 끄고 종료하세요. 그렇지 않으면 직접 워커를 시작하기
+   전에 런처가 자체 백그라운드 데몬을 조용히 시작해버릴 수 있습니다(백그라운드 데몬은 TTY가 연결되어
+   있지 않아 HITL을 수행할 수 없습니다).
+3. 런처를 닫은 상태에서 이 저장소 디렉터리에서 터미널을 열고 `codex-chatgpt-web serve --hitl`을
+   실행해 포그라운드에서 계속 실행 상태로 둡니다. 세션을 시작할 때마다 저장소 디렉터리에서 다시
+   실행하세요.
+4. 평소처럼 **Codex Web GPT**를 시작합니다. 로그인하고, 브라우저 스모크 테스트를 완료한 뒤 모델을
+   설치하세요. 이미 어떤 런타임이 포트를 사용 중임을 감지하면 충돌하는 자체 데몬을 시작하지
+   않습니다. 이에 관한 경고가 표시되어도 정상이며 무시해도 됩니다. 워커와 함께 계속 실행해 두세요.
+5. Codex CLI를 열고 ChatGPT Web 모델을 선택하면, 도구 호출이 `serve --hitl`을 실행 중인 터미널에
+   `[EXEC_REQUEST]` 프롬프트로 도착하게 됩니다.
+
+**현재 제한 사항:**
+
+- **쓰기가 가능하며 내용 기반 샌드박스가 없습니다.** 실행 채널은 승인한 명령을 그대로 실행합니다
+  — 파괴적인 명령(`rm`, `git commit`, `sed -i` 등)도 포함되며, 파일 시스템에 실제 영향을 미칩니다.
+  기본 제공되는 제한은 명령이 설정된 작업 공간 디렉터리로 제한된다는 것과, 모든 개별 명령에 대해
+  명시적 승인이 필요하다는 것뿐입니다. 자동 읽기 전용 강제나 명령 차단 목록은 없습니다.
+- **명령당 10분 타임아웃, 10KB 출력 상한.** 장시간 실행되거나 출력이 많은 명령은 잘려서 표시됩니다.
+  위임하는 하위 작업의 범위를 좁게 설정하세요(전체 감사가 아니라 파일 하나나 질문 하나 수준으로).
+- **한 줄 명령만 지원합니다.** `command:` 필드는 한 줄로 파싱되므로, 위임하는 작업 프롬프트는
+  단일 인용부호로 감싸고 줄바꿈이나 단일 인용부호를 포함하지 않아야 합니다.
+- **신호 전달이 검증되지 않았습니다.** 타임아웃은 명령의 셸 프로세스에 SIGTERM을 전송하지만, 이것이
+  중첩된 `codex exec`가 생성하는 모든 프로세스에 확실히 도달하는지는 독립적으로 확인되지 않았습니다.
 
 </details>
 

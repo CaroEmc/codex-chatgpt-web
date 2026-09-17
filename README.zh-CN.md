@@ -3,17 +3,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.7/codex-web-gpt-5.0.7-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">所有版本</a>
+  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v5.0.8/codex-web-gpt-5.0.8-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">所有版本</a>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
 </p>
 
 <p align="center">
@@ -105,6 +105,71 @@ Zero Risk 不读取或操作 ChatGPT 页面。请自行选择模型和 `Codex Ze
 [开发者模式和 MCP 应用](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)。
 除非显式启用 `--auto-approve-tool-calls`，否则意外的审批提示会直接失败；该选项只会点击
 **Allow once**，绝不会授予永久权限。
+
+</details>
+
+<details>
+<summary><strong>仅浏览器本地执行（HITL）</strong></summary>
+
+<a id="hitl"></a>
+
+当 MCP 隧道不可用时（例如被网络屏蔽），`--hitl` 可让仅浏览器会话改为直接从终端运行本地
+shell 命令，并对每一条命令都需要你的明确批准：
+
+```bash
+codex-chatgpt-web setup --browser-only --acknowledge-unofficial
+codex-chatgpt-web serve --hitl
+```
+
+`--hitl` 需要同时使用 `--browser-only`（Full harness 模式已经可以通过 MCP 进行真正的工具调用），
+且只有在前台运行并连接了 TTY 时才会激活——在其他任何情况下（例如作为后台服务运行）都会 fail-closed
+（不执行任何命令）。
+
+激活后，模型可以通过发出 `[EXEC_REQUEST]` 块来请求运行一条命令；终端会显示
+**AI EXECUTION PROPOSAL**，并等待你按 Enter 或 `y` 来运行、按 `n` 或 Esc 拒绝，或按 `c` 先编辑该
+命令。未经这一逐条命令的批准，任何操作都不会执行。
+
+这种传输方式没有 MCP 子代理工具，因此模型会被指示改为通过非交互方式运行已批准的 `codex exec`
+shell 命令来委派独立的子任务（例如对单个文件进行范围受限的代码审查），并通过第二次
+`[EXEC_REQUEST]` 读回结果。
+
+如果你正在这个仓库中进行开发（例如测试一个尚未合并进官方发行版的分支上的本地修改），请从源码
+构建并安装这两者，而不要下载上面预先构建好的二进制文件，这样安装的 `codex-chatgpt-web` 和
+**Codex Web GPT** 才会真正反映你的修改：
+
+```bash
+./scripts/install-local.sh
+./scripts/install-launcher-local.sh
+```
+
+如果没有需要测试的本地修改，可以跳过这一步，直接使用官方发行版；下面的内容在两种情况下都适用。
+
+**快速开始（与启动器应用一起使用 `--hitl`）：**
+
+1. 请确保上面的 setup 命令已经至少执行过一次。如果这台机器的配置已经在使用启动器自身的浏览器
+   （如果你之前用过打包版应用，通常就是这种情况），请在启动器打开的状态下执行——setup 会检测
+   启动器的账户/模型能力，如果启动器没有运行就会失败。这是一次性步骤，如果已经完成过可以跳过。
+2. 在启动器的偏好设置中关闭**登录时打开**并退出它，这样它就不会在你启动自己的 worker 之前，
+   悄悄启动自己的后台守护进程（后台守护进程没有连接 TTY，无法进行 HITL）。
+3. 关闭启动器后，在本仓库目录下打开一个终端，运行 `codex-chatgpt-web serve --hitl` 并让它在前台
+   持续运行；每次开始新会话时都要在仓库目录下重新执行一次。
+4. 照常启动 **Codex Web GPT**：登录、等浏览器烟雾测试完成，然后安装模型。它会检测到已经有一个
+   运行中的实例占用了端口，因此不会再启动一个冲突的守护进程；出现相关警告是正常现象，可以放心
+   忽略。让它和 worker 一起保持运行。
+5. 打开 Codex CLI，选择一个 ChatGPT Web 模型，工具调用现在会作为 `[EXEC_REQUEST]` 提示出现在运行
+   `serve --hitl` 的终端中。
+
+**当前限制：**
+
+- **具有写入能力，且不会按内容进行沙箱化。** 该执行通道会运行你批准的任何命令——包括破坏性命令
+  （`rm`、`git commit`、`sed -i` 等）——并对文件系统产生真实影响。唯一内置的限制是命令被限定在
+  已配置的工作区目录内，并且每一条命令都需要你的明确批准；没有自动的只读强制或命令黑名单。
+- **每条命令 10 分钟超时、10KB 输出上限。** 长时间运行或输出较多的命令会被截断；应将委派的子任务
+  范围限定得很窄（一个文件或一个问题，而不是完整审计）。
+- **仅支持单行命令。** `command:` 字段会作为单行解析，因此委派任务的提示词必须用单引号包裹，且
+  不能包含换行符或单引号。
+- **信号传播尚未验证。** 超时会向命令的 shell 进程发送 SIGTERM，但这是否能可靠地传达到嵌套的
+  `codex exec` 所派生的所有进程，尚未得到独立确认。
 
 </details>
 

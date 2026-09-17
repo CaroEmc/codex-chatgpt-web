@@ -16,6 +16,7 @@ export interface LauncherState {
   showBrowserDuringTurns: boolean;
   browserInteractionMode: BrowserInteractionMode;
   experimentalBiggerContext: boolean;
+  experimentalSkillAttachments: boolean;
   zeroRiskProEnabled: boolean;
   sidebarOpen: boolean;
   sidebarWidth: number;
@@ -186,6 +187,7 @@ export interface LauncherApi {
   startHitl(): Promise<HitlStatus>;
   disableHitl(): Promise<HitlStatus>;
   copyText(text: string): Promise<boolean>;
+  setSkillAttachments(enabled: boolean): Promise<LauncherState>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;
