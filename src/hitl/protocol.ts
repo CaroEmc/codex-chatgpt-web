@@ -2,25 +2,47 @@ export interface ParsedExecRequest {
   command: string;
   cwd?: string;
   reason?: string;
+  /** Requested run time limit, already clamped to the allowed range. */
+  timeoutSeconds?: number;
 }
 
+/** Most commands are quick lookups; a slow one should fail fast instead of stalling the turn. */
+export const HITL_EXEC_DEFAULT_TIMEOUT_SECONDS = 60;
+/** Upper bound a request may ask for, e.g. a test run or a delegated `codex exec` sub-task. */
+export const HITL_EXEC_MAX_TIMEOUT_SECONDS = 600;
+
 const EXEC_REQUEST_BLOCK = /\[EXEC_REQUEST\]\s*([\s\S]*?)\s*\[\/EXEC_REQUEST\]/;
-const FIELD_LINE = /^\s*(command|cwd|reason)\s*:\s*(.*)$/i;
+const FIELD_LINE = /^\s*(command|cwd|reason|timeout)\s*:\s*(.*)$/i;
+type ExecRequestField = "command" | "cwd" | "reason" | "timeout";
+
+function parseTimeoutSeconds(value: string | undefined): number | undefined {
+  const match = value ? /^(\d+)\s*(?:s|sec|secs|seconds?)?$/i.exec(value) : null;
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return undefined;
+  return Math.min(seconds, HITL_EXEC_MAX_TIMEOUT_SECONDS);
+}
 
 /** Only the first well-formed block is honored; a missing/incomplete block returns undefined
  * so the caller falls back to treating the text as an ordinary final answer. */
 export function parseExecRequest(text: string): ParsedExecRequest | undefined {
   const match = EXEC_REQUEST_BLOCK.exec(text);
   if (!match) return undefined;
-  const fields: Partial<Record<"command" | "cwd" | "reason", string>> = {};
+  const fields: Partial<Record<ExecRequestField, string>> = {};
   for (const line of match[1]!.split("\n")) {
     const fieldMatch = FIELD_LINE.exec(line);
     if (!fieldMatch) continue;
-    const key = fieldMatch[1]!.toLowerCase() as "command" | "cwd" | "reason";
+    const key = fieldMatch[1]!.toLowerCase() as ExecRequestField;
     if (fields[key] === undefined) fields[key] = fieldMatch[2]!.trim();
   }
   if (!fields.command) return undefined;
-  return { command: fields.command, cwd: fields.cwd, reason: fields.reason };
+  const timeoutSeconds = parseTimeoutSeconds(fields.timeout);
+  return {
+    command: fields.command,
+    cwd: fields.cwd,
+    reason: fields.reason,
+    ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+  };
 }
 
 export function formatExecResult(exitCode: number, output: string): string {
@@ -64,8 +86,15 @@ export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "command: <command to execute>",
   "cwd: <target working directory, defaults to .>",
   "reason: <rationale for executing this command>",
+  `timeout: <optional seconds, default ${HITL_EXEC_DEFAULT_TIMEOUT_SECONDS}, at most ${HITL_EXEC_MAX_TIMEOUT_SECONDS}>`,
   "[/EXEC_REQUEST]",
   "Do not fabricate outputs. Do not produce subsequent summaries until you receive [EXEC_RESULT].",
+  "",
+  `A command is stopped after ${HITL_EXEC_DEFAULT_TIMEOUT_SECONDS} seconds unless the request sets a longer timeout.`,
+  "Only ask for more when the work genuinely needs it, such as a test run, a build, or a delegated sub-task.",
+  "Keep every command fast and scoped to the project: search with rg on explicit project-relative paths,",
+  "and never scan outside the workspace or recurse through large trees (for example `dir /s` or `find`",
+  "over a home directory or a drive root). If a file may live elsewhere, ask the user for its path instead.",
   "",
   "Every request costs a full round trip, so batch read-only inspection: gather everything the next step needs",
   "in ONE command instead of issuing one command per question. Chain independent read-only queries",
@@ -83,7 +112,7 @@ export const DEV_CHAT_HITL_PROTOCOL_INSTRUCTIONS = [
   "The command field is exactly one line, so the task prompt must also fit on that one line:",
   "wrap it in single quotes (never double quotes -- those let the shell expand backticks and",
   "$(...) inside your own prompt text), keep it free of embedded single quotes, and keep it short:",
-  "the command has a 600-second timeout and its output is capped at 10KB, so scope the sub-task",
+  `set timeout: ${HITL_EXEC_MAX_TIMEOUT_SECONDS} on that request (the ${HITL_EXEC_MAX_TIMEOUT_SECONDS}-second maximum); output is capped at 10KB, so scope the sub-task`,
   "narrowly (e.g. one file or one question, not a full audit) and tell it to report only a brief",
   "verdict. Give it a fully self-contained prompt -- it starts with no memory of this conversation.",
   "Never add --dangerously-bypass-approvals-and-sandbox to this command.",

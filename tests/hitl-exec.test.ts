@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AutoApproveGateway, type ApprovalGateway, type ApprovalDecision, type ExecProposal } from "../src/hitl/approval";
 import { EXEC_REJECTED_TEXT, formatCwdOutsideWorkspace } from "../src/hitl/protocol";
-import { composerSafeOutput, HITL_EXEC_TIMEOUT_MS, runApprovedCommand } from "../src/hitl/exec";
+import { composerSafeOutput, HITL_EXEC_DEFAULT_TIMEOUT_MS, HITL_EXEC_TIMEOUT_MS, runApprovedCommand } from "../src/hitl/exec";
 
 class FixedGateway implements ApprovalGateway {
   seen: ExecProposal[] = [];
@@ -233,3 +233,49 @@ test("a timeout kills the whole process tree, not just the shell", async () => {
     rmSync(workspace, { recursive: true, force: true });
   }
 }, 20_000);
+
+test("a request's timeout field bounds that command instead of the 10-minute ceiling", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const cmd = `bun -e "setTimeout(() => {}, 20000)"`;
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const lines: string[] = [];
+    const started = Date.now();
+    const result = await runApprovedCommand(gateway, { command: cmd, timeoutSeconds: 1 }, workspace, {
+      report: line => lines.push(line),
+    });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(result).toContain("exit_code: 124");
+    expect(result).toContain("timed out after 1000ms");
+    expect(result).toContain("set a longer timeout");
+    expect(lines.some(line => line.includes("stopping after 1s"))).toBe(true);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("a long-running command is reported periodically on the daemon terminal", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "hitl-exec-"));
+  try {
+    const cmd = `bun -e "setTimeout(() => console.log('done'), 1500)"`;
+    const gateway = new FixedGateway({ action: "run", command: cmd });
+    const lines: string[] = [];
+    const result = await runApprovedCommand(gateway, { command: cmd }, workspace, {
+      progressIntervalMs: 300,
+      report: line => lines.push(line),
+    });
+    expect(result).toContain("exit_code: 0");
+    expect(result).toContain("done");
+    expect(lines.some(line => line.startsWith("[hitl] still running after") && line.includes(cmd))).toBe(true);
+    const count = lines.length;
+    await new Promise(resolveWait => setTimeout(resolveWait, 700));
+    expect(lines.length).toBe(count);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("the default timeout for a request without a timeout field is much shorter than the ceiling", () => {
+  expect(HITL_EXEC_DEFAULT_TIMEOUT_MS).toBe(60_000);
+  expect(HITL_EXEC_DEFAULT_TIMEOUT_MS).toBeLessThan(HITL_EXEC_TIMEOUT_MS);
+});
