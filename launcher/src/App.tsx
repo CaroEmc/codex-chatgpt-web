@@ -1128,10 +1128,16 @@ function SetupSurface({
     await api!.smokeTest();
     updateState((await api!.snapshot()).state);
   });
-  const install = () => run(async () => {
-    await api!.setupCore();
-    updateState((await api!.snapshot()).state);
-  });
+  const [modelsAdded, setModelsAdded] = useState(false);
+  const install = () => {
+    if (!devProfile && !window.confirm(copy.closeCodexBeforeInstall)) return;
+    void run(async () => {
+      setModelsAdded(false);
+      await api!.setupCore();
+      updateState((await api!.snapshot()).state);
+      if (!devProfile) setModelsAdded(true);
+    });
+  };
   const setZeroRiskPro = (enabled: boolean) => run(async () => {
     updateState(await api!.setZeroRiskPro(enabled));
   });
@@ -1188,7 +1194,16 @@ function SetupSurface({
             />
           ) : undefined}
         />
+        {!devProfile && !manualInteraction ? (
+          <HitlSetupStep copy={copy} index={4} setError={setError} />
+        ) : null}
       </div>
+
+      {modelsAdded ? (
+        <NoticeRow icon="check" tone="success">
+          {copy.launchCodexAfterInstall}
+        </NoticeRow>
+      ) : null}
 
       {!devProfile && snapshot.state.codexRestartRequired ? (
         <NoticeRow icon="alert" tone="warning">
@@ -1717,8 +1732,6 @@ function SettingsSurface({
         </NoticeRow>
       ) : null}
 
-      {!devProfile ? <HitlSection copy={copy} setError={setError} /> : null}
-
       <SectionHeading label={copy.diagnostics} spaced />
       <button className="diagnostic-row" disabled={busy} onClick={() => void runDoctor()} type="button">
         <Icon name="activity" />
@@ -1760,9 +1773,18 @@ function SettingsSurface({
   );
 }
 
-function HitlSection({ copy, setError }: { copy: Copy; setError: (error: string | null) => void }) {
+function HitlSetupStep({
+  copy,
+  index,
+  setError,
+}: {
+  copy: Copy;
+  index: number;
+  setError: (error: string | null) => void;
+}) {
   const [status, setStatus] = useState<HitlStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -1779,11 +1801,13 @@ function HitlSection({ copy, setError }: { copy: Copy; setError: (error: string 
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const act = async (action: () => Promise<HitlStatus>) => {
+  const act = async (action: () => Promise<HitlStatus | unknown>) => {
     setBusy(true);
     setError(null);
     try {
-      setStatus(await action());
+      const result = await action();
+      if (result && typeof result === "object" && "command" in result) setStatus(result as HitlStatus);
+      else await refresh();
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
@@ -1791,34 +1815,73 @@ function HitlSection({ copy, setError }: { copy: Copy; setError: (error: string 
     }
   };
 
+  const copyCommand = async () => {
+    if (!status) return;
+    try {
+      await api!.copyText(status.command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2_000);
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  };
+
   if (!status?.supported) return null;
   const locked = busy || status.listening;
   return (
     <>
-      <SectionHeading label={copy.hitlTitle} spaced />
-      <div className="settings-list">
-        <SettingRow body={status.browserOnly ? copy.hitlBody : copy.hitlBrowserOnlyRequired} label={copy.hitlTitle}>
-          <PrimaryButton disabled={locked || !status.browserOnly || !status.workspace} onClick={() => void act(() => api!.startHitl())}>
-            {copy.hitlStart}
-          </PrimaryButton>
-        </SettingRow>
-        <SettingRow body={status.workspace ?? copy.hitlNoWorkspace} label={copy.hitlWorkspace}>
-          <SecondaryButton disabled={locked || !status.browserOnly} onClick={() => void act(() => api!.chooseHitlWorkspace())}>
-            {copy.hitlChooseWorkspace}
-          </SecondaryButton>
-        </SettingRow>
-        {status.enabled && !status.listening ? (
-          <SettingRow body={copy.hitlModeIdle} label={copy.hitlDisable}>
-            <SecondaryButton disabled={busy} onClick={() => void act(() => api!.disableHitl())}>
-              {copy.hitlDisable}
-            </SecondaryButton>
-          </SettingRow>
-        ) : null}
-      </div>
-      {status.listening ? (
-        <NoticeRow icon="check" tone="success">
-          {copy.hitlRunning} {copy.hitlRestartCodexHint}
-        </NoticeRow>
+      <SetupRow
+        action={copy.hitlStart}
+        complete={status.listening}
+        description={status.browserOnly ? copy.stepHitlBody : copy.hitlBrowserOnlyRequired}
+        disabled={locked || !status.browserOnly || !status.workspace}
+        index={index}
+        onAction={() => void act(() => api!.startHitl())}
+        onSecondaryAction={() => void act(() => api!.chooseHitlWorkspace())}
+        secondaryAction={copy.hitlChooseWorkspace}
+        secondaryDisabled={locked || !status.browserOnly}
+        title={copy.stepHitl}
+      />
+      {status.browserOnly ? (
+        <div className="hitl-panel">
+          <div className="hitl-panel-row">
+            <span>{copy.hitlWorkspace}</span>
+            <code>{status.workspace ?? copy.hitlNoWorkspace}</code>
+          </div>
+          <div className="hitl-panel-row">
+            <span>
+              <strong>{copy.hitlAutoApproveLabel}</strong>
+              <small>{copy.hitlAutoApproveBody}</small>
+            </span>
+            <Switch
+              checked={status.autoApprove}
+              disabled={locked}
+              onChange={(checked) => void act(() => api!.setPreference("hitlAutoApprove", checked))}
+            />
+          </div>
+          <div className="hitl-panel-row is-command">
+            <span>{copy.hitlCommandLabel}</span>
+            <div className="hitl-command">
+              <code>{status.command}</code>
+              <SecondaryButton disabled={!status.workspace} onClick={() => void copyCommand()}>
+                {copied ? copy.hitlCopied : copy.hitlCopy}
+              </SecondaryButton>
+            </div>
+          </div>
+          {status.enabled && !status.listening ? (
+            <div className="hitl-panel-row">
+              <span>{copy.hitlModeIdle}</span>
+              <SecondaryButton disabled={busy} onClick={() => void act(() => api!.disableHitl())}>
+                {copy.hitlDisable}
+              </SecondaryButton>
+            </div>
+          ) : null}
+          {status.listening ? (
+            <NoticeRow icon="check" tone="success">
+              {copy.hitlRunning} {copy.hitlRestartCodexHint}
+            </NoticeRow>
+          ) : null}
+        </div>
       ) : null}
     </>
   );

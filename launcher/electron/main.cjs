@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -19,7 +20,7 @@ const {
 const { BrowserHost, navigationErrorForLog } = require("./browser-host.cjs");
 const { BrowserControlServer } = require("./control-server.cjs");
 const { HitlPopupController } = require("./hitl-popup.cjs");
-const { launchHitlTerminal, validateHitlWorkspace } = require("./hitl-terminal.cjs");
+const { hitlCommandLine, launchHitlTerminal, validateHitlWorkspace } = require("./hitl-terminal.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const {
   createLogger,
@@ -875,20 +876,30 @@ function registerIpc({ logger, stateStore }) {
     return { state, credentialsRequired: false, targetMode: mode };
   });
   handle("launcher:set-preference", (_event, key, value) => {
-    const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns";
+    const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns" || key === "hitlAutoApprove";
     if (!ordinary) throw new Error("Unknown preference");
     return stateStore.update({ [key]: value === true });
   });
   handle("launcher:sidebar-state", (_event, value) => stateStore.update(validateSidebarState(value)));
+  const hitlServeArgs = (workspace, autoApprove) => [
+    "serve",
+    "--hitl",
+    "--workspace",
+    workspace,
+    ...(autoApprove ? ["--hitl-auto-approve"] : []),
+  ];
   const hitlStatus = async () => {
     const config = runtimeSupervisor.readSetupConfig();
     const enabled = runtimeSupervisor.terminalHitlEnabled();
+    const state = stateStore.read();
     return {
       supported: !IS_DEV_PROFILE && process.platform === "win32",
       browserOnly: config?.mode === "browser-only",
       enabled,
       listening: Boolean(enabled && config && await runtimeSupervisor.proxyHealth(config)),
-      workspace: stateStore.read().hitlWorkspace,
+      workspace: state.hitlWorkspace,
+      autoApprove: state.hitlAutoApprove,
+      command: hitlCommandLine(state.hitlWorkspace, state.hitlAutoApprove),
     };
   };
   const assertHitlSupported = () => {
@@ -917,7 +928,7 @@ function registerIpc({ logger, stateStore }) {
       throw new Error(`A server is already listening on port ${config.port}; close the existing HITL terminal first`);
     }
     launchHitlTerminal({
-      invocation: runtimeHost.command(["serve", "--hitl", "--workspace", workspace]),
+      invocation: runtimeHost.command(hitlServeArgs(workspace, stateStore.read().hitlAutoApprove)),
       scriptPath: path.join(CORE_HOME, "runtime", "hitl-terminal.cmd"),
       environment: { ...process.env, CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR: BROWSER_DESCRIPTOR_PATH },
     });
@@ -932,6 +943,11 @@ function registerIpc({ logger, stateStore }) {
     }
     await runtimeSupervisor.setTerminalHitlMode(false);
     return hitlStatus();
+  });
+  handle("launcher:copy-text", (_event, text) => {
+    if (typeof text !== "string" || text.length > 4096) throw new Error("Clipboard text is invalid");
+    clipboard.writeText(text);
+    return true;
   });
   handle("launcher:logs", (_event, limit) => logger.recent(limit));
   handle("launcher:export-logs", async () => {

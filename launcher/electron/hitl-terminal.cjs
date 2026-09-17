@@ -74,8 +74,16 @@ function launchHitlTerminal({
   return child;
 }
 
+/** The command a user pastes into their own terminal; the CLI wrapper name matches the installers. */
+function hitlCommandLine(workspace, autoApprove) {
+  const folder = typeof workspace === "string" ? workspace.trim() : "";
+  const quoted = !folder ? "<project folder>" : /[\s&()^]/.test(folder) ? `"${folder}"` : folder;
+  return `codex-chatgpt-web serve --hitl --workspace ${quoted}${autoApprove ? " --hitl-auto-approve" : ""}`;
+}
+
 module.exports = {
   HITL_TERMINAL_TITLE,
+  hitlCommandLine,
   hitlTerminalScript,
   launchHitlTerminal,
   validateHitlWorkspace,

@@ -58,6 +58,30 @@ curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/
 irm https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install-launcher.ps1 | iex
 ```
 
+**Windows friendly installer (checks the machine first)**
+
+`scripts/install-friendly.ps1` inspects the machine before anything is installed and prints an
+OK / WARN / FAIL report with a fix for each problem: 64-bit Windows, disk space, Bun, git, ripgrep,
+the Codex CLI and desktop app, HTTPS inspection and certificate trust (see "Corporate networks &
+TLS inspection" below), the Responses port, the launcher, the CLI wrappers, the
+Codex model route, and — with `-Workspace <folder>` — a project `.codex/config.toml` that pins
+`model` and makes the Codex desktop picker snap back.
+
+- Check only (changes nothing): `powershell -ExecutionPolicy Bypass -File scripts\install-friendly.ps1`
+- Apply the safe user-level fixes it offers: add `-Fix`
+- Install the packaged launcher: add `-ZipPath <codex-web-gpt-friendly-win-x64.zip>`, or
+  `-Install -Repository <owner/repo> [-Tag <tag>]` to download it from that repository's releases
+
+Maintainers build the zip with `scripts/package-friendly-release.ps1 -Build`; it bundles the NSIS
+installer, its checksum, `install-friendly.ps1`, and `INSTALL.txt`, and uploads to a GitHub Release
+only when `-Publish -Repository <owner/repo> -Tag <tag>` is given.
+
+After installing, the launcher's **Setup** page walks through the rest: 1. sign in to ChatGPT,
+2. run the browser smoke test, 3. **Add models** to Codex (quit every Codex window first; start
+Codex yourself if it does not open), and 4. on Windows browser-only mode, **Start the HITL
+terminal** for a project folder, or copy the shown
+`codex-chatgpt-web serve --hitl --workspace <folder> --hitl-auto-approve` command into a terminal.
+
 </details>
 
 <details>
@@ -218,6 +242,55 @@ Validation coverage: [release validation](docs/release-validation.md).
 This is independent software and is not affiliated with or endorsed by OpenAI. Use it only with
 your own account and in accordance with applicable [Terms of Use](https://openai.com/policies/terms-of-use/)
 and workspace policies; it does not bypass authentication or access controls.
+
+</details>
+
+<details>
+<summary><strong>Corporate networks & TLS inspection</strong></summary>
+
+<a id="corporate-tls"></a>
+
+On a network that intercepts HTTPS with its own certificate authority, the Bun runtime rejects
+`chatgpt.com` and `api.openai.com` with `SELF_SIGNED_CERT_IN_CHAIN` or
+`unable to get local issuer certificate`, while the launcher's ChatGPT page, Codex, and the
+tunnel client keep working because they use the operating system's trust store. Bun does not use
+that store by default; choose one of the two settings below and set it as a user-level environment
+variable so the launcher-started runtime inherits it too.
+
+**Option 1 — `NODE_USE_SYSTEM_CA=1` (recommended).** Bun trusts the operating system's certificate
+store (Windows certificate store, macOS Keychain, or the Linux system bundle), so a corporate root
+CA that IT already deployed is picked up automatically and certificate rotations need no local
+changes.
+
+- Windows (PowerShell): `[Environment]::SetEnvironmentVariable('NODE_USE_SYSTEM_CA', '1', 'User')`
+- macOS / Linux: add `export NODE_USE_SYSTEM_CA=1` to your shell profile.
+- The same behavior is available per process as `bun --use-system-ca`.
+- Prerequisite: the corporate root CA must be in the system store. On Windows, check with
+  `Get-ChildItem Cert:\LocalMachine\Root, Cert:\CurrentUser\Root | Where-Object Subject -like '*<CA name>*'`.
+
+**Option 2 — `NODE_EXTRA_CA_CERTS=<path to PEM>`.** Bun keeps its bundled roots and additionally
+trusts the certificates in one PEM file. Use it when the corporate CA is not in the system store,
+or on a machine where Option 1 is unavailable.
+
+- The file must contain the corporate root CA, plus any intermediate CA the network does not send.
+  Export them from your browser's certificate viewer or ask IT; a server's own (leaf) certificate is
+  not needed.
+- Windows (PowerShell): `[Environment]::SetEnvironmentVariable('NODE_EXTRA_CA_CERTS', 'C:\path\corp-ca.pem', 'User')`
+- macOS / Linux: `export NODE_EXTRA_CA_CERTS=/path/corp-ca.pem`
+- The variable is read once at process start and must point to an existing file; update the PEM
+  whenever IT rotates the CA or intercepting intermediate.
+
+The two options can be combined: the PEM certificates are added on top of the system store.
+
+After changing either variable, restart everything that starts Bun so it inherits the new value:
+open a new terminal before `codex-chatgpt-web serve`, quit and reopen the launcher, and fully
+restart Codex. If you launch through a custom `codex-chatgpt-web.cmd` or shell wrapper that sets
+these variables itself, update the wrapper as well, and re-check it after reinstalling.
+
+To verify, run
+`bun -e "for (const u of ['https://chatgpt.com/','https://api.openai.com/v1/models']) console.log(u, (await fetch(u, {method:'HEAD'})).status)"`
+— both URLs should print an HTTP status (a `401` from `api.openai.com` without a key is expected)
+instead of a certificate error.
 
 </details>
 

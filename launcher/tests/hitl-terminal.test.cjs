@@ -89,3 +89,19 @@ test("launchHitlTerminal is Windows-only", () => {
     spawnProcess: () => assert.fail("must not spawn"),
   }), /Windows only/);
 });
+
+test("hitlCommandLine builds the paste-ready serve command, quoting folders that need it", () => {
+  const { hitlCommandLine } = require("../electron/hitl-terminal.cjs");
+  assert.equal(
+    hitlCommandLine("D:/work/proj", true),
+    "codex-chatgpt-web serve --hitl --workspace D:/work/proj --hitl-auto-approve",
+  );
+  assert.equal(
+    hitlCommandLine("D:/my work/a&b", false),
+    "codex-chatgpt-web serve --hitl --workspace \"D:/my work/a&b\"",
+  );
+  assert.equal(
+    hitlCommandLine(null, true),
+    "codex-chatgpt-web serve --hitl --workspace <project folder> --hitl-auto-approve",
+  );
+});

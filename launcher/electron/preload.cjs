@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld("codexWebLauncher", {
   chooseHitlWorkspace: () => ipcRenderer.invoke("launcher:hitl-choose-workspace"),
   startHitl: () => ipcRenderer.invoke("launcher:hitl-start"),
   disableHitl: () => ipcRenderer.invoke("launcher:hitl-disable"),
+  copyText: (text) => ipcRenderer.invoke("launcher:copy-text", text),
   logs: (limit) => ipcRenderer.invoke("launcher:logs", limit),
   exportLogs: () => ipcRenderer.invoke("launcher:export-logs"),
   installUpdate: () => ipcRenderer.invoke("launcher:update-install"),

@@ -24,6 +24,7 @@ const DEFAULT_STATE = Object.freeze({
   mcpGuideStep: 0,
   sessionRefreshReminderAt: null,
   hitlWorkspace: null,
+  hitlAutoApprove: true,
 });
 
 function nextSessionRefreshReminderAt(now = Date.now()) {
@@ -51,6 +52,7 @@ function readState(filePath) {
       "zeroRiskProEnabled",
       "browserSmokePassed",
       "sidebarOpen",
+      "hitlAutoApprove",
     ]) {
       if (typeof state[key] !== "boolean") state[key] = DEFAULT_STATE[key];
     }

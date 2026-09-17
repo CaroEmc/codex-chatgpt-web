@@ -29,6 +29,7 @@ export interface LauncherState {
   mcpGuideStep: number;
   sessionRefreshReminderAt: string | null;
   hitlWorkspace?: string | null;
+  hitlAutoApprove?: boolean;
 }
 
 export interface HitlStatus {
@@ -37,6 +38,8 @@ export interface HitlStatus {
   enabled: boolean;
   listening: boolean;
   workspace: string | null;
+  autoApprove: boolean;
+  command: string;
 }
 
 export interface BrowserState {
@@ -170,6 +173,7 @@ export interface LauncherApi {
   chooseHitlWorkspace(): Promise<HitlStatus>;
   startHitl(): Promise<HitlStatus>;
   disableHitl(): Promise<HitlStatus>;
+  copyText(text: string): Promise<boolean>;
   setZeroRiskPro(enabled: boolean): Promise<LauncherState>;
   setBrowserInteractionMode(mode: BrowserInteractionMode): Promise<{
     state: LauncherState;
@@ -177,7 +181,7 @@ export interface LauncherApi {
     targetMode: BrowserInteractionMode;
   }>;
   setPreference(
-    key: "keepRunningOnClose" | "showBrowserDuringTurns",
+    key: "keepRunningOnClose" | "showBrowserDuringTurns" | "hitlAutoApprove",
     value: boolean,
   ): Promise<LauncherState>;
   setSidebarState(state: { open: boolean; width: number }): Promise<LauncherState>;
