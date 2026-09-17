@@ -11,12 +11,14 @@
 #   -Build      run `bun run package:win` in launcher/ first
 #   -Publish    upload with gh (creates the release when the tag does not exist yet); nothing is
 #               uploaded without this switch
+#   -Target     branch or commit a newly created tag points at (default: the repository's default branch)
 
 param(
   [switch]$Build,
   [switch]$Publish,
   [string]$Repository,
   [string]$Tag,
+  [string]$Target,
   [string]$OutputDir
 )
 
@@ -99,7 +101,9 @@ try {
   & gh release view $Tag -R $Repository *> $null
   if ($LASTEXITCODE -ne 0) {
     Write-Host "Creating release $Tag in $Repository ..." -ForegroundColor Cyan
-    & gh release create $Tag -R $Repository --title "Codex Web GPT $Version (friendly Windows package)" --notes "Friendly Windows package: installer, install-friendly.ps1, and checksums. See INSTALL.txt inside the zip." $Zip $Checksums
+    $TargetArgs = @()
+    if ($Target) { $TargetArgs = @("--target", $Target) }
+    & gh release create $Tag -R $Repository @TargetArgs --title "Codex Web GPT $Version (friendly Windows package)" --notes "Friendly Windows package: installer, install-friendly.ps1, and checksums. See INSTALL.txt inside the zip." $Zip $Checksums
   } else {
     Write-Host "Uploading to existing release $Tag in $Repository ..." -ForegroundColor Cyan
     & gh release upload $Tag -R $Repository $Zip $Checksums --clobber
